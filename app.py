@@ -1,89 +1,110 @@
 import streamlit as st
-import google.generativeai as genai
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import json
 import pandas as pd
 from datetime import datetime
 from PIL import Image
+import requests
+import base64
+import io
 
 # --- AYARLAR ---
 try:
-    GOOGLE_API_KEY = st.secrets["GEMINI_API_KEY"]
-    sheets_secrets = st.secrets["gcp_service_account"]
-except:
-    st.error("Anahtarlar bulunamadı! Lütfen Streamlit Secrets ayarlarını kontrol edin.")
+    if "GEMINI_API_KEY" in st.secrets:
+        API_KEY = st.secrets["GEMINI_API_KEY"]
+    else:
+        st.error("API Key eksik! Secrets ayarlarını kontrol edin.")
+        st.stop()
+        
+    if "gcp_service_account" in st.secrets:
+        sheets_secrets = st.secrets["gcp_service_account"]
+    else:
+        st.error("Google Sheets yetkisi eksik! Secrets ayarlarını kontrol edin.")
+        st.stop()
+except Exception as e:
+    st.error(f"Ayar hatası: {e}")
     st.stop()
 
-# --- GEMINI MODELİNİ BAŞLAT ---
-genai.configure(api_key=GOOGLE_API_KEY)
-
-# BURAYI DEĞİŞTİRDİK: Flash yerine garanti çalışan 'gemini-pro-vision' kullanıyoruz.
-model = genai.GenerativeModel('gemini-pro-vision')
-
 # --- GOOGLE SHEETS BAĞLANTISI ---
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(sheets_secrets, scope)
-client = gspread.authorize(creds)
+try:
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(sheets_secrets, scope)
+    client = gspread.authorize(creds)
+    SHEET_NAME = "LabSonuclari" # Tablo adınızın aynısı olmalı
+except Exception as e:
+    st.error(f"Google Sheets Bağlantı Hatası: {e}")
+    st.stop()
 
-# Tablo adını buraya yaz
-SHEET_NAME = "LabSonuclari" 
+# --- YARDIMCI FONKSİYON: RESMİ BASE64 YAPMA ---
+def image_to_base64(image):
+    buffered = io.BytesIO()
+    image.save(buffered, format="PNG")
+    return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-st.title("🩺 Asistan Lab Veri Girişi")
-st.warning("Not: Sadece resim dosyası yükleyin (PNG, JPG).")
+# --- ANA EKRAN ---
+st.title("🩺 Asistan Veri Giriş Paneli")
+st.info("Sistem Durumu: Manuel Bağlantı Modu (v3)")
 
-uploaded_file = st.file_uploader("Lab Sonucunu Yükle", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("Lab Sonucu Yükle", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    # Resmi PIL formatında açıyoruz (Daha güvenli yöntem)
     image = Image.open(uploaded_file)
     st.image(image, caption='Yüklenen Resim', width=300)
     
-    if st.button("Verileri Analiz Et ve Tabloya Yaz"):
-        with st.spinner('Yapay zeka verileri okuyor...'):
+    if st.button("Analiz Et ve Kaydet"):
+        with st.spinner('Google Gemini sunucusuna bağlanılıyor...'):
             try:
-                # 1. Prompt Hazırla
-                prompt = """
-                Sen bir tıbbi asistan yapay zekasın. Bu resimdeki laboratuvar sonuçlarını oku.
-                Aşağıdaki değerleri bul ve sadece saf JSON formatında çıktı ver.
-                Markdown (```json) kullanma, sadece süslü parantez ile başla ve bitir.
-                Değer bulamazsan "null" yaz.
+                # 1. Resmi Hazırla
+                base64_image = image_to_base64(image)
+                
+                # 2. DOĞRUDAN API İSTEĞİ (Kütüphanesiz)
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={API_KEY}"
+                
+                headers = {'Content-Type': 'application/json'}
+                payload = {
+                    "contents": [{
+                        "parts": [
+                            {"text": "Bu resimdeki laboratuvar sonuçlarını oku. Şu değerleri JSON olarak ver: WBC, Neu, Hgb, Plt, CRP. Değer yoksa null yaz. Sadece saf JSON döndür, markdown kullanma."},
+                            {"inline_data": {
+                                "mime_type": "image/png",
+                                "data": base64_image
+                            }}
+                        ]
+                    }]
+                }
+                
+                # İsteği Gönder
+                response = requests.post(url, headers=headers, json=payload)
+                
+                if response.status_code != 200:
+                    st.error(f"Sunucu Hatası ({response.status_code}): {response.text}")
+                else:
+                    # 3. Yanıtı İşle
+                    result = response.json()
+                    try:
+                        text_content = result['candidates'][0]['content']['parts'][0]['text']
+                        # JSON temizliği
+                        text_content = text_content.replace("```json", "").replace("```", "").strip()
+                        data = json.loads(text_content)
+                        
+                        st.success("Veriler Çekildi:")
+                        st.json(data)
+                        
+                        # 4. Sheets'e Yaz
+                        sheet = client.open(SHEET_NAME).sheet1
+                        row = [
+                            str(datetime.now())[:19],
+                            data.get("WBC"), data.get("Neu"), 
+                            data.get("Hgb"), data.get("Plt"), data.get("CRP")
+                        ]
+                        sheet.append_row(row)
+                        st.balloons()
+                        st.success("✅ Tabloya başarıyla eklendi!")
+                        
+                    except Exception as parse_error:
+                        st.error(f"Veri çözümleme hatası: {parse_error}")
+                        st.write("Ham yanıt:", result)
 
-                İstenenler:
-                - WBC
-                - Neu
-                - Hgb
-                - Plt
-                - CRP
-                """
-                
-                # 2. Modeli Çalıştır (Eski yöntem - Pro Vision uyumlu)
-                response = model.generate_content([prompt, image])
-                
-                # 3. Yanıtı Temizle
-                text_response = response.text
-                # Bazen AI ```json ile başlar, temizleyelim
-                if "```" in text_response:
-                    text_response = text_response.replace("```json", "").replace("```", "")
-                
-                data = json.loads(text_response)
-                
-                st.subheader("Bulunan Değerler:")
-                st.json(data) 
-
-                # 4. Sheets'e Kaydet
-                sheet = client.open(SHEET_NAME).sheet1
-                yeni_satir = [
-                    datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    data.get("WBC", "-"),
-                    data.get("Neu", "-"),
-                    data.get("Hgb", "-"),
-                    data.get("Plt", "-"),
-                    data.get("CRP", "-")
-                ]
-                
-                sheet.append_row(yeni_satir)
-                st.success(f"✅ Başarılı! Veriler kaydedildi.")
-                
             except Exception as e:
-                st.error(f"Hata oluştu: {e}")
+                st.error(f"Beklenmeyen hata: {e}")
