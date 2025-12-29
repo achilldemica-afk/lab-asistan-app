@@ -10,7 +10,7 @@ import base64
 import io
 
 # --- 1. AYARLAR ---
-st.set_page_config(page_title="Lab Asistanı (Kamera)", page_icon="📸", layout="wide")
+st.set_page_config(page_title="Lab Asistanı", page_icon="🩸", layout="wide")
 
 try:
     if "GEMINI_API_KEY" in st.secrets:
@@ -45,51 +45,31 @@ def image_to_base64(image):
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
 # --- 4. ARAYÜZ ---
-st.title("📸 Lab Asistanı (Kamera Modu)")
-st.info("İster galeriden yükleyin, ister doğrudan kamerayı açıp çekin.")
+st.title("🩸 Lab Asistanı (Mobil Uyumlu)")
+st.info("ℹ️ Telefondan giriyorsanız **'Browse files'** butonuna basınca **'Fotoğraf Çek'** veya **'Kamera'** seçeneğini seçin. Bu sayede telefonun orijinal kamerası açılır ve en net görüntü elde edilir.")
 
 col1, col2 = st.columns(2)
 
-# --- HEMOGRAM GİRİŞ ALANI ---
 with col1:
     st.markdown("### 1. Hemogram")
-    # Kullanıcıya seçenek sunuyoruz: Dosya mı Kamera mı?
-    tab1_up, tab1_cam = st.tabs(["📁 Dosya Yükle", "📷 Fotoğraf Çek"])
-    
-    with tab1_up:
-        hemo_upload = st.file_uploader("Hemogram Dosyası", type=["jpg", "png", "jpeg"], key="hemo_up")
-    
-    with tab1_cam:
-        hemo_camera = st.camera_input("Hemogramı Çek", key="hemo_cam")
-    
-    # Hangisi doluysa onu 'hemo_file' olarak kabul et
-    hemo_file = hemo_upload if hemo_upload else hemo_camera
+    hemo_file = st.file_uploader("Hemogram Yükle / Çek", type=["jpg", "png", "jpeg"], key="hemo")
 
-# --- BİYOKİMYA GİRİŞ ALANI ---
 with col2:
     st.markdown("### 2. Biyokimya")
-    tab2_up, tab2_cam = st.tabs(["📁 Dosya Yükle", "📷 Fotoğraf Çek"])
-    
-    with tab2_up:
-        bio_upload = st.file_uploader("Biyokimya Dosyası", type=["jpg", "png", "jpeg"], key="bio_up")
-    
-    with tab2_cam:
-        bio_camera = st.camera_input("Biyokimyayı Çek", key="bio_cam")
-        
-    bio_file = bio_upload if bio_upload else bio_camera
+    bio_file = st.file_uploader("Biyokimya Yükle / Çek", type=["jpg", "png", "jpeg"], key="bio")
 
 
 if st.button("Analizi Başlat", type="primary"):
     
     if not hemo_file and not bio_file:
-        st.warning("Lütfen en az bir sonuç (dosya veya kamera) girin.")
+        st.warning("Lütfen dosya yükleyin veya fotoğraf çekin.")
         st.stop()
 
-    with st.spinner('Gemini 3.0 Pro (Satır Takip Modu) çalışıyor...'):
+    with st.spinner('Gemini 3.0 Pro sonuçları okuyor...'):
         try:
             content_parts = []
             
-            # --- PROMPT: SATIR TAKİP MANTIĞI ---
+            # --- PROMPT: SATIR VE SÜTUN TAKİP MANTIĞI ---
             prompt_text = """
             GÖREV: Sen titiz bir veri giriş operatörüsün. Önündeki kağıtta yazanları satır satır okuyup sisteme gireceksin.
             
@@ -128,13 +108,12 @@ if st.button("Analizi Başlat", type="primary"):
             
             content_parts.append({"text": prompt_text})
 
-            # Dosyaları işle (Kameradan mı geldi dosyadan mı fark etmez, ikisi de resim verisi)
             if hemo_file:
                 content_parts.append({"inline_data": {"mime_type": "image/png", "data": image_to_base64(Image.open(hemo_file))}})
             if bio_file:
                 content_parts.append({"inline_data": {"mime_type": "image/png", "data": image_to_base64(Image.open(bio_file))}})
 
-            # --- MODEL: Gemini 3.0 Pro Preview ---
+            # --- MODEL: Gemini 3.0 Pro Preview (En Akıllısı) ---
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent?key={API_KEY}"
             
             headers = {'Content-Type': 'application/json'}
@@ -180,10 +159,10 @@ if st.button("Analizi Başlat", type="primary"):
                         data.get("Prokalsitonin")
                     ]
                     sheet.append_row(row)
-                    st.success("✅ Veriler Kaydedildi!")
+                    st.success("✅ Başarıyla Kaydedildi!")
                     
                 except Exception as parse_error:
-                    st.error("Veri okunamadı. Resim net olmayabilir.")
+                    st.error("Veri okunamadı. Lütfen fotoğrafın net olduğundan emin olun.")
                     st.text(text_content)
             else:
                 st.error(f"Sunucu Hatası: {response.status_code}")
