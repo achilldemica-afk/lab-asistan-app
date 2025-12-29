@@ -10,7 +10,7 @@ import base64
 import io
 
 # --- 1. AYARLAR ---
-st.set_page_config(page_title="Lab Asistanı", page_icon="🩸", layout="wide")
+st.set_page_config(page_title="Makale Kulübü Lab Asistanı", page_icon="🩸", layout="wide")
 
 try:
     if "GEMINI_API_KEY" in st.secrets:
@@ -45,8 +45,8 @@ def image_to_base64(image):
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
 # --- 4. ARAYÜZ ---
-st.title("🩸 Lab Asistanı (Mobil Uyumlu)")
-st.info("ℹ️ Telefondan giriyorsanız **'Browse files'** butonuna basınca **'Fotoğraf Çek'** veya **'Kamera'** seçeneğini seçin. Bu sayede telefonun orijinal kamerası açılır ve en net görüntü elde edilir.")
+st.title("🩸 Makale Kulübü Lab Asistanı")
+st.info("ℹ️ Telefondan giriyorsanız **'Browse files'** butonuna basınca **'Fotoğraf Çek'** veya **'Kamera'** seçeneğini seçin.")
 
 col1, col2 = st.columns(2)
 
@@ -65,7 +65,7 @@ if st.button("Analizi Başlat", type="primary"):
         st.warning("Lütfen dosya yükleyin veya fotoğraf çekin.")
         st.stop()
 
-    with st.spinner('Gemini 3.0 Pro sonuçları okuyor...'):
+    with st.spinner('Hmm...'):
         try:
             content_parts = []
             
