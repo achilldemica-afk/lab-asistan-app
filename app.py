@@ -10,7 +10,7 @@ import base64
 import io
 
 # --- 1. AYARLAR ---
-st.set_page_config(page_title="Lab Asistanı (Gemini 3)", page_icon="🧪", layout="wide")
+st.set_page_config(page_title="Makale Kulübü Lab Çevirici", page_icon="🧪", layout="wide")
 
 try:
     if "GEMINI_API_KEY" in st.secrets:
@@ -60,7 +60,7 @@ if st.button("Analizi Başlat", type="primary"):
         st.warning("Dosya seçilmedi.")
         st.stop()
 
-    with st.spinner('Gemini 3 Pro tabloyu satır satır okuyor...'):
+    with st.spinner('Hmm...'):
         try:
             content_parts = []
             
@@ -158,7 +158,7 @@ if st.button("Analizi Başlat", type="primary"):
                         data.get("Prokalsitonin")
                     ]
                     sheet.append_row(row)
-                    st.success("✅ Gemini 3 ile kaydedildi!")
+                    st.success("✅ Kaydedildi!")
                     
                 except Exception as parse_error:
                     st.error("Model yanıtı işlenemedi.")
