@@ -5,72 +5,74 @@ from oauth2client.service_account import ServiceAccountCredentials
 import json
 import pandas as pd
 from datetime import datetime
+from PIL import Image
 
 # --- AYARLAR ---
-# Bu kısımları Streamlit Secrets'tan çekeceğiz, buraya dokunma.
 try:
     GOOGLE_API_KEY = st.secrets["GEMINI_API_KEY"]
-    # Google Sheets credentials işlemleri (Secrets içindeki JSON verisini kullanacağız)
     sheets_secrets = st.secrets["gcp_service_account"]
 except:
-    st.error("Anahtarlar bulunamadı! Lütfen Streamlit Secrets ayarlarını yapın.")
+    st.error("Anahtarlar bulunamadı! Lütfen Streamlit Secrets ayarlarını kontrol edin.")
     st.stop()
 
-# --- GEMINI AI MODELİNİ BAŞLAT ---
+# --- GEMINI MODELİNİ BAŞLAT ---
 genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+
+# BURAYI DEĞİŞTİRDİK: Flash yerine garanti çalışan 'gemini-pro-vision' kullanıyoruz.
+model = genai.GenerativeModel('gemini-pro-vision')
 
 # --- GOOGLE SHEETS BAĞLANTISI ---
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(sheets_secrets, scope)
 client = gspread.authorize(creds)
 
-# Tablo adını buraya yaz (Sheet'in sol üstündeki isimle AYNI olmalı)
+# Tablo adını buraya yaz
 SHEET_NAME = "LabSonuclari" 
 
 st.title("🩺 Asistan Lab Veri Girişi")
-st.write("Laboratuvar sonucunun ekran görüntüsünü yükleyin.")
+st.warning("Not: Sadece resim dosyası yükleyin (PNG, JPG).")
 
-uploaded_file = st.file_uploader("Resim Yükle", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("Lab Sonucunu Yükle", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    st.image(uploaded_file, caption='Yüklenen Resim', width=300)
+    # Resmi PIL formatında açıyoruz (Daha güvenli yöntem)
+    image = Image.open(uploaded_file)
+    st.image(image, caption='Yüklenen Resim', width=300)
     
     if st.button("Verileri Analiz Et ve Tabloya Yaz"):
         with st.spinner('Yapay zeka verileri okuyor...'):
             try:
-                # 1. AI'ya Talimat Ver (Prompt)
+                # 1. Prompt Hazırla
                 prompt = """
-                Bu tıbbi laboratuvar sonucunu incele. Aşağıdaki değerleri bul ve bana SADECE geçerli bir JSON formatında ver.
-                Başka hiçbir kelime yazma. Eğer değer yoksa "null" yaz.
-                Sayısal değerleri sayı (float/int) olarak ver.
+                Sen bir tıbbi asistan yapay zekasın. Bu resimdeki laboratuvar sonuçlarını oku.
+                Aşağıdaki değerleri bul ve sadece saf JSON formatında çıktı ver.
+                Markdown (```json) kullanma, sadece süslü parantez ile başla ve bitir.
+                Değer bulamazsan "null" yaz.
 
-                İstediğim Alanlar:
-                - WBC (Lökosit)
-                - Neu (Nötrofil, bazen Neu% veya #Neu olabilir, mutlak değeri tercih et)
-                - Hgb (Hemoglobin)
-                - Plt (Trombosit)
-                - CRP (C-Reaktif Protein)
+                İstenenler:
+                - WBC
+                - Neu
+                - Hgb
+                - Plt
+                - CRP
                 """
                 
-                # 2. Resmi Gönder
-                # Streamlit uploaded file'ı byte'a çevirip gönderiyoruz
-                image_bytes = uploaded_file.getvalue()
-                image_parts = [{"mime_type": uploaded_file.type, "data": image_bytes}]
+                # 2. Modeli Çalıştır (Eski yöntem - Pro Vision uyumlu)
+                response = model.generate_content([prompt, image])
                 
-                response = model.generate_content([prompt, image_parts[0]])
+                # 3. Yanıtı Temizle
+                text_response = response.text
+                # Bazen AI ```json ile başlar, temizleyelim
+                if "```" in text_response:
+                    text_response = text_response.replace("```json", "").replace("```", "")
                 
-                # 3. Gelen Yanıtı Temizle ve JSON'a Çevir
-                cleaned_text = response.text.replace("```json", "").replace("```", "").strip()
-                data = json.loads(cleaned_text)
+                data = json.loads(text_response)
                 
                 st.subheader("Bulunan Değerler:")
-                st.json(data) # Kullanıcıya göster
+                st.json(data) 
 
-                # 4. Google Sheets'e Kaydet
+                # 4. Sheets'e Kaydet
                 sheet = client.open(SHEET_NAME).sheet1
-                
-                # Satır sırası: Tarih, WBC, Neu, Hgb, Plt, CRP
                 yeni_satir = [
                     datetime.now().strftime("%Y-%m-%d %H:%M"),
                     data.get("WBC", "-"),
@@ -81,8 +83,7 @@ if uploaded_file is not None:
                 ]
                 
                 sheet.append_row(yeni_satir)
-                st.success(f"✅ Başarılı! Veriler '{SHEET_NAME}' tablosuna eklendi.")
+                st.success(f"✅ Başarılı! Veriler kaydedildi.")
                 
             except Exception as e:
-                st.error(f"Bir hata oluştu: {e}")
-                st.error("Lütfen resmin net olduğundan emin olun veya tekrar deneyin.")
+                st.error(f"Hata oluştu: {e}")
