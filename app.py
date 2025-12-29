@@ -45,7 +45,7 @@ def image_to_base64(image):
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
 # --- 4. ARAYÜZ ---
-st.title("🧪 Lab Asistanı (Gemini 3.0 Pro)")
+st.title("🧪 Makale Kulübü Lab Çevirici")
 st.warning("⚠️ MOTOR: Gemini 3.0 Pro (Preview) | MOD: Satır Satır Tarama")
 
 col1, col2 = st.columns(2)
