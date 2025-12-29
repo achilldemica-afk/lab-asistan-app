@@ -10,7 +10,7 @@ import base64
 import io
 
 # --- 1. AYARLAR ---
-st.set_page_config(page_title="Makale Kulübü Lab Çevirici", page_icon="🧪", layout="wide")
+st.set_page_config(page_title="Lab Asistanı (Kamera)", page_icon="📸", layout="wide")
 
 try:
     if "GEMINI_API_KEY" in st.secrets:
@@ -45,26 +45,51 @@ def image_to_base64(image):
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
 # --- 4. ARAYÜZ ---
-st.title("🧪 Makale Kulübü Lab Çevirici")
-st.warning("⚠️ MOTOR: Gemini 3.0 Pro (Preview) | MOD: Satır Satır Tarama")
+st.title("📸 Lab Asistanı (Kamera Modu)")
+st.info("İster galeriden yükleyin, ister doğrudan kamerayı açıp çekin.")
 
 col1, col2 = st.columns(2)
+
+# --- HEMOGRAM GİRİŞ ALANI ---
 with col1:
-    hemo_file = st.file_uploader("1. Hemogram Yükle", type=["jpg", "png", "jpeg"], key="hemo")
+    st.markdown("### 1. Hemogram")
+    # Kullanıcıya seçenek sunuyoruz: Dosya mı Kamera mı?
+    tab1_up, tab1_cam = st.tabs(["📁 Dosya Yükle", "📷 Fotoğraf Çek"])
+    
+    with tab1_up:
+        hemo_upload = st.file_uploader("Hemogram Dosyası", type=["jpg", "png", "jpeg"], key="hemo_up")
+    
+    with tab1_cam:
+        hemo_camera = st.camera_input("Hemogramı Çek", key="hemo_cam")
+    
+    # Hangisi doluysa onu 'hemo_file' olarak kabul et
+    hemo_file = hemo_upload if hemo_upload else hemo_camera
+
+# --- BİYOKİMYA GİRİŞ ALANI ---
 with col2:
-    bio_file = st.file_uploader("2. Biyokimya Yükle", type=["jpg", "png", "jpeg"], key="bio")
+    st.markdown("### 2. Biyokimya")
+    tab2_up, tab2_cam = st.tabs(["📁 Dosya Yükle", "📷 Fotoğraf Çek"])
+    
+    with tab2_up:
+        bio_upload = st.file_uploader("Biyokimya Dosyası", type=["jpg", "png", "jpeg"], key="bio_up")
+    
+    with tab2_cam:
+        bio_camera = st.camera_input("Biyokimyayı Çek", key="bio_cam")
+        
+    bio_file = bio_upload if bio_upload else bio_camera
+
 
 if st.button("Analizi Başlat", type="primary"):
     
     if not hemo_file and not bio_file:
-        st.warning("Dosya seçilmedi.")
+        st.warning("Lütfen en az bir sonuç (dosya veya kamera) girin.")
         st.stop()
 
-    with st.spinner('Hmm...'):
+    with st.spinner('Gemini 3.0 Pro (Satır Takip Modu) çalışıyor...'):
         try:
             content_parts = []
             
-            # --- YENİ PROMPT: SATIR TAKİP MANTIĞI ---
+            # --- PROMPT: SATIR TAKİP MANTIĞI ---
             prompt_text = """
             GÖREV: Sen titiz bir veri giriş operatörüsün. Önündeki kağıtta yazanları satır satır okuyup sisteme gireceksin.
             
@@ -74,7 +99,6 @@ if st.button("Analizi Başlat", type="primary"):
             3. Yan taraftaki "Referans Aralığı" (Örn: 11-15) sütununa SAKIN bakma. Orayı görmezden gel.
             
             AŞAĞIDAKİLERİ TEK TEK BUL:
-            
             - "HGB" veya "Hemoglobin" yazısını bul -> Yanındaki Sonucu al.
             - "PLT" veya "Trombosit" yazısını bul -> Yanındaki Sonucu al.
             - "RDW" yazısını bul -> Yanındaki Sonucu al.
@@ -104,13 +128,13 @@ if st.button("Analizi Başlat", type="primary"):
             
             content_parts.append({"text": prompt_text})
 
+            # Dosyaları işle (Kameradan mı geldi dosyadan mı fark etmez, ikisi de resim verisi)
             if hemo_file:
                 content_parts.append({"inline_data": {"mime_type": "image/png", "data": image_to_base64(Image.open(hemo_file))}})
             if bio_file:
                 content_parts.append({"inline_data": {"mime_type": "image/png", "data": image_to_base64(Image.open(bio_file))}})
 
-            # --- MODEL SEÇİMİ: SENİN LİSTENDEKİ '3.0 PRO' ---
-            # Listende 'models/gemini-3-pro-preview' vardı. Bunu kullanıyoruz.
+            # --- MODEL: Gemini 3.0 Pro Preview ---
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent?key={API_KEY}"
             
             headers = {'Content-Type': 'application/json'}
@@ -124,15 +148,13 @@ if st.button("Analizi Başlat", type="primary"):
                     text_content = result['candidates'][0]['content']['parts'][0]['text']
                     text_content = text_content.replace("```json", "").replace("```", "").strip()
                     
-                    # JSON Ayıklama
                     start = text_content.find('{')
                     end = text_content.rfind('}') + 1
                     if start != -1 and end != -1:
                          data = json.loads(text_content[start:end])
                     else:
-                         data = json.loads(text_content) # Belki direkt json dönmüştür
+                         data = json.loads(text_content)
 
-                    # Kontrol Paneli
                     st.subheader(f"Hasta: {data.get('ID', 'Bilinmiyor')}")
                     
                     c1, c2, c3, c4 = st.columns(4)
@@ -158,10 +180,10 @@ if st.button("Analizi Başlat", type="primary"):
                         data.get("Prokalsitonin")
                     ]
                     sheet.append_row(row)
-                    st.success("✅ Kaydedildi!")
+                    st.success("✅ Veriler Kaydedildi!")
                     
                 except Exception as parse_error:
-                    st.error("Model yanıtı işlenemedi.")
+                    st.error("Veri okunamadı. Resim net olmayabilir.")
                     st.text(text_content)
             else:
                 st.error(f"Sunucu Hatası: {response.status_code}")
