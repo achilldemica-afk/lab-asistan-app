@@ -33,8 +33,6 @@ try:
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds = ServiceAccountCredentials.from_json_keyfile_dict(sheets_secrets, scope)
     client = gspread.authorize(creds)
-    
-    # DİKKAT: Excel dosyanın adı tam olarak bu olmalı
     SHEET_NAME = "Hasta Takip" 
 except Exception as e:
     st.error(f"Google Sheets Bağlantı Hatası: {e}")
@@ -48,7 +46,7 @@ def image_to_base64(image):
 
 # --- 4. ARAYÜZ ---
 st.title("🩸 Hasta Takip & Veri Girişi")
-st.info("Hemogram ve Biyokimya sonuçlarını yükleyin. Sistem ikisini birleştirip tek satır yapacaktır.")
+st.success("Aktif Model: Gemini 2.5 PRO (Yüksek Hassasiyet Modu)")
 
 col1, col2 = st.columns(2)
 
@@ -58,46 +56,42 @@ with col1:
 with col2:
     bio_file = st.file_uploader("2. Biyokimya (Sarı Tüp)", type=["jpg", "png", "jpeg"], key="bio")
 
-# Analiz Butonu
 if st.button("Analiz Et ve Tabloya Yaz", type="primary"):
     
     if not hemo_file and not bio_file:
         st.warning("Lütfen en az bir sonuç kağıdı yükleyin.")
         st.stop()
 
-    with st.spinner('Yapay zeka sonuçları okuyor ve hasta ismini arıyor...'):
+    with st.spinner('Yapay zeka (Pro) dikkatlice inceliyor...'):
         try:
-            # --- GÖRÜNTÜLERİ HAZIRLA ---
             content_parts = []
             
-            # Asıl Komut (Prompt) - Excel Sütunlarına Göre Ayarlı
+            # --- GELİŞTİRİLMİŞ EMRİNİZ (PROMPT) ---
             prompt_text = """
-            Sen uzman bir tıbbi asistansın. Yüklenen laboratuvar sonuçlarını incele.
+            Sen son derece titiz bir tıbbi veri uzmanısın. Yüklenen laboratuvar sonuçlarını incele.
             
-            GÖREVLER:
-            1. Resmin sol üst köşesindeki Hasta Adı Soyadı veya Protokol numarasını bul ve 'ID' olarak kaydet.
-            2. Aşağıdaki spesifik değerleri bul. Hemogram ve Biyokimya kağıtlarını ayırt et.
-            3. Sonucu SADECE JSON formatında ver. Başka kelime etme.
+            GÖREVLER VE KURALLAR:
+            1. **Sayısal Hassasiyet:** Rakamları okurken OCR hatalarına düşme. Nokta (.) ve Virgül (,) ayrımına çok dikkat et.
+            2. **Kimlik:** Resmin sol üst köşesindeki Hasta Adı Soyadı veya Protokol numarasını bul ve 'ID' olarak al.
+            3. **Format:** Sonucu sadece JSON formatında ver.
             
-            İSTENEN JSON FORMATI (Excel sütunlarına karşılık gelen):
+            İSTENEN JSON ALANLARI:
             {
                 "ID": "Hasta Adı veya TC",
-                "HGB": "Sayısal değer",
-                "PLT": "Sayısal değer",
-                "RDW": "Sayısal değer",
-                "NEUT_HASH": "Nötrofil Mutlak Sayısı (Neu# veya Neu)",
-                "LYMPH_HASH": "Lenfosit Mutlak Sayısı (Lym# veya Lym)",
-                "IG_HASH": "İmmatür Granülosit (IG# veya IG). Yoksa null yaz.",
-                "CRP": "C-Reaktif Protein",
+                "HGB": "Hemoglobin değeri (Sayı)",
+                "PLT": "Trombosit değeri (Sayı)",
+                "RDW": "RDW değeri (Sayı)",
+                "NEUT_HASH": "Nötrofil MUTLAK sayısı (Genelde NEU# veya #NEU yazar, % değil)",
+                "LYMPH_HASH": "Lenfosit MUTLAK sayısı (LYM#)",
+                "IG_HASH": "İmmatür Granülosit (IG#). Yoksa null.",
+                "CRP": "CRP değeri",
                 "Prokalsitonin": "Prokalsitonin değeri"
             }
-            
-            Eğer bir değer kağıtta yoksa "null" yaz. Ondalıklı sayıları nokta (.) ile ayır.
+            Değer kağıtta yoksa "null" yaz.
             """
             
             content_parts.append({"text": prompt_text})
 
-            # Hemogram varsa ekle
             if hemo_file:
                 img_hemo = Image.open(hemo_file)
                 content_parts.append({
@@ -107,7 +101,6 @@ if st.button("Analiz Et ve Tabloya Yaz", type="primary"):
                     }
                 })
 
-            # Biyokimya varsa ekle
             if bio_file:
                 img_bio = Image.open(bio_file)
                 content_parts.append({
@@ -117,47 +110,41 @@ if st.button("Analiz Et ve Tabloya Yaz", type="primary"):
                     }
                 })
 
-            # --- API İSTEĞİ (Gemini 2.5 Flash) ---
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={API_KEY}"
+            # --- MODEL DEĞİŞİKLİĞİ BURADA YAPILDI ---
+            # Eski: gemini-2.5-flash -> Yeni: gemini-2.5-pro
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={API_KEY}"
+            
             headers = {'Content-Type': 'application/json'}
             payload = {"contents": [{"parts": content_parts}]}
             
             response = requests.post(url, headers=headers, json=payload)
             
             if response.status_code == 200:
-                # --- SONUCU İŞLE ---
                 result = response.json()
                 text_content = result['candidates'][0]['content']['parts'][0]['text']
-                
-                # JSON Temizliği
                 text_content = text_content.replace("```json", "").replace("```", "").strip()
                 data = json.loads(text_content)
                 
-                # Ekrana Göster
                 st.subheader(f"Hasta: {data.get('ID', 'Bulunamadı')}")
                 st.json(data)
                 
-                # --- GOOGLE SHEETS KAYDI ---
-                # Excel'deki sütun sırasına göre diziyoruz:
-                # A:ID, B:HGB, C:PLT, D:RDW, E:NEUT#, F:LYMPH#, G:IG#, H:CRP, I:Prokalsitonin
-                
+                # Excel Kaydı
                 sheet = client.open(SHEET_NAME).sheet1
-                
                 row = [
                     data.get("ID"),
                     data.get("HGB"),
                     data.get("PLT"),
                     data.get("RDW"),
-                    data.get("NEUT_HASH"),   # Excel'deki NEUT#
-                    data.get("LYMPH_HASH"),  # Excel'deki LYMPH#
-                    data.get("IG_HASH"),     # Excel'deki IG#
+                    data.get("NEUT_HASH"),
+                    data.get("LYMPH_HASH"),
+                    data.get("IG_HASH"),
                     data.get("CRP"),
                     data.get("Prokalsitonin")
                 ]
                 
                 sheet.append_row(row)
                 st.balloons()
-                st.success(f"✅ {data.get('ID')} için veriler 'Hasta Takip' dosyasına eklendi!")
+                st.success(f"✅ Kayıt Başarılı! (Kullanılan Model: Gemini 2.5 PRO)")
                 
             else:
                 st.error(f"Sunucu Hatası: {response.status_code}")
