@@ -1,6 +1,11 @@
 streamlit
-requests
 gspread
 oauth2client
 pandas
 Pillow
+requests
+altair
+scipy
+seaborn
+matplotlib
+numpy
