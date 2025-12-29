@@ -111,7 +111,7 @@ if st.button("Analizi Başlat", type="primary"):
 
             # --- MODEL SEÇİMİ: SENİN LİSTENDEKİ '3.0 PRO' ---
             # Listende 'models/gemini-3-pro-preview' vardı. Bunu kullanıyoruz.
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent?key={API_KEY}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={API_KEY}"
             
             headers = {'Content-Type': 'application/json'}
             payload = {"contents": [{"parts": content_parts}]}
