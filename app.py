@@ -18,7 +18,7 @@ except:
 
 # --- GEMINI AI MODELİNİ BAŞLAT ---
 genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash-latest')
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 # --- GOOGLE SHEETS BAĞLANTISI ---
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
