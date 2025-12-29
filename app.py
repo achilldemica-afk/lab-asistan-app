@@ -9,8 +9,8 @@ import requests
 import base64
 import io
 
-# --- 1. AYARLAR ---
-st.set_page_config(page_title="Hasta Takip Asistanı", page_icon="🩸")
+# --- 1. GÜVENLİK VE AYARLAR ---
+st.set_page_config(page_title="Lab Asistanı 2.0", page_icon="🧬", layout="wide")
 
 try:
     if "GEMINI_API_KEY" in st.secrets:
@@ -33,20 +33,20 @@ try:
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds = ServiceAccountCredentials.from_json_keyfile_dict(sheets_secrets, scope)
     client = gspread.authorize(creds)
-    SHEET_NAME = "Hasta Takip" 
+    SHEET_NAME = "Hasta Takip"  # Excel dosya adın
 except Exception as e:
     st.error(f"Google Sheets Bağlantı Hatası: {e}")
     st.stop()
 
-# --- 3. YARDIMCI FONKSİYON ---
+# --- 3. YARDIMCI FONKSİYONLAR ---
 def image_to_base64(image):
     buffered = io.BytesIO()
     image.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-# --- 4. ARAYÜZ ---
-st.title("🩸 Hasta Takip (Tablo Modu)")
-st.info("Yöntem: Sütun Eşleştirme (Parametre -> Sonuç)")
+# --- 4. ARAYÜZ TASARIMI ---
+st.title("🧬 Lab Asistanı 2.0 (Gemini 2.0 Motoru)")
+st.markdown("Bu sürüm, **Gemini 2.0 Flash** motorunu kullanarak tabloyu önce okur, sonra veriyi çeker. Rakam uydurma riskini en aza indirir.")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -54,92 +54,120 @@ with col1:
 with col2:
     bio_file = st.file_uploader("2. Biyokimya Yükle", type=["jpg", "png", "jpeg"], key="bio")
 
-if st.button("Analiz Et", type="primary"):
+# --- 5. ANALİZ MOTORU ---
+if st.button("Analizi Başlat", type="primary"):
     
     if not hemo_file and not bio_file:
-        st.warning("Dosya seçilmedi.")
+        st.warning("Lütfen dosya yükleyin.")
         st.stop()
 
-    with st.spinner('Tablo sütunları taranıyor...'):
-        try:
-            content_parts = []
-            
-            # --- TABLO ODAKLI YENİ PROMPT ---
-            prompt_text = """
-            Sen sadece görüntü işleyen bir robotsun. Resmi bir Excel tablosu gibi düşün.
-            
-            GÖREV: Aşağıdaki adımları sırayla uygula:
-            
-            ADIM 1: SÜTUNLARI TESPİT ET
-            - Resimde parametre isimlerinin yazdığı sütunu bul (Genelde "Test Adı" veya "Parametre" yazar).
-            - Resimde ölçüm değerlerinin yazdığı sütunu bul (Genelde "Sonuç" veya "Result" yazar).
-            - Resimde "Referans Aralığı" veya "Normal Değerler" sütununu bul ve bu sütunu TAMAMEN UNUT. Buradan asla veri alma.
-            
-            ADIM 2: SATIRLARI BUL VE EŞLEŞTİR
-            Aşağıdaki anahtar kelimeleri "Parametre" sütununda ara, bulduğun satırın hizasındaki "Sonuç" sütunundaki sayıyı al.
-            
-            ARANACAKLAR:
-            1. Parametre Sütununda: "HGB" veya "Hemoglobin" -> Sonuç Sütunundaki değeri al -> JSON'da "HGB"ye yaz.
-            2. Parametre Sütununda: "PLT" veya "Trombosit" -> Sonuç Sütunundaki değeri al -> JSON'da "PLT"ye yaz.
-            3. Parametre Sütununda: "RDW" -> Sonuç Sütunundaki değeri al -> JSON'da "RDW"ye yaz.
-            4. Parametre Sütununda: "NEU#" veya "Nötrofil#" (Mutlak değer) -> JSON'da "NEUT_HASH"a yaz.
-            5. Parametre Sütununda: "LYM#" veya "Lenfosit#" (Mutlak değer) -> JSON'da "LYMPH_HASH"a yaz.
-            6. Parametre Sütununda: "IG#" veya "İmmatür Granülosit" -> JSON'da "IG_HASH"a yaz (Yoksa null).
-            7. Parametre Sütununda: "CRP" veya "C-Reaktif Protein" -> Sonuç Sütunundaki değeri al -> JSON'da "CRP"ye yaz.
-            8. Parametre Sütununda: "Prokalsitonin" -> Sonuç Sütunundaki değeri al -> JSON'da "Prokalsitonin"e yaz.
-            
-            ÖZEL NOT (CRP İÇİN): 
-            - CRP satırını bulduğunda, referans aralığına bakma. Sadece Sonuç sütununda ne yazıyorsa (Örn: 5, 3.2, <5) onu olduğu gibi al.
-            - Eğer hücre boş değilse "null" yazma.
-            
-            KİMLİK:
-            - Sol üstteki İsim/Protokol bilgisini "ID" olarak al.
-            
-            ÇIKTI FORMATI (JSON):
-            { "ID": "...", "HGB": "...", "PLT": "...", "RDW": "...", "NEUT_HASH": "...", "LYMPH_HASH": "...", "IG_HASH": "...", "CRP": "...", "Prokalsitonin": "..." }
-            """
-            
-            content_parts.append({"text": prompt_text})
+    status_text = st.empty()
+    status_text.info("Gemini 2.0 Flash motoru çalıştırılıyor...")
 
-            if hemo_file:
-                content_parts.append({"inline_data": {"mime_type": "image/png", "data": image_to_base64(Image.open(hemo_file))}})
-            if bio_file:
-                content_parts.append({"inline_data": {"mime_type": "image/png", "data": image_to_base64(Image.open(bio_file))}})
+    try:
+        content_parts = []
+        
+        # --- YENİ PROMPT STRATEJİSİ: "OCR FIRST" ---
+        # Modele önce tabloyu dökmesini, sonra JSON yapmasını söylüyoruz.
+        prompt_text = """
+        Sen gelişmiş bir OCR (Optik Karakter Tanıma) motorusun.
+        
+        GÖREV 1: KİMLİK TESPİTİ
+        Resmin sol üst veya üst orta kısmındaki Hasta Adı/Soyadı veya Protokol numarasını bul.
+        
+        GÖREV 2: TABLO OKUMA VE EŞLEŞTİRME
+        Resimdeki tabloyu satır satır incele. Şu mantığı kullan:
+        1. "Parametre Adı" sütununu bul (Örn: WBC, HGB, PLT, CRP yazar).
+        2. "Sonuç" (Result) sütununu bul.
+        3. "Referans Aralığı" sütununu bul ve GÖRMEZDEN GEL.
+        
+        Aşağıdaki parametrelerin tam karşısındaki "SONUÇ" değerini al:
+        - HGB (Hemoglobin)
+        - PLT (Trombosit)
+        - RDW (veya RDW-CV/SD)
+        - NEU# (Nötrofil Mutlak Değeri - % olanı değil, # olanı al)
+        - LYM# (Lenfosit Mutlak Değeri - % olanı değil, # olanı al)
+        - IG# (İmmatür Granülosit Mutlak Değeri - Yoksa 'null' yaz)
+        - CRP (C-Reaktif Protein - Referans ile aynı olsa bile sonucu al)
+        - Prokalsitonin
+        
+        GÖREV 3: ÇIKTI ÜRETME
+        Sadece ve sadece aşağıdaki JSON formatını üret. Başka hiçbir metin yazma.
+        
+        {
+            "ID": "Bulunan İsim",
+            "HGB": 0.0,
+            "PLT": 0,
+            "RDW": 0.0,
+            "NEUT_HASH": 0.0,
+            "LYMPH_HASH": 0.0,
+            "IG_HASH": 0.0,
+            "CRP": 0.0,
+            "Prokalsitonin": 0.0
+        }
+        
+        Eğer bir değer yoksa rakam yerine null yaz. Sayılarda nokta (.) kullan.
+        """
+        
+        content_parts.append({"text": prompt_text})
 
-            # Model: 2.5 Pro (En iyisi)
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={API_KEY}"
-            headers = {'Content-Type': 'application/json'}
-            payload = {"contents": [{"parts": content_parts}]}
-            
-            response = requests.post(url, headers=headers, json=payload)
-            
-            if response.status_code == 200:
-                result = response.json()
-                try:
-                    text_content = result['candidates'][0]['content']['parts'][0]['text']
-                    text_content = text_content.replace("```json", "").replace("```", "").strip()
-                    
-                    # JSON ayıklama
-                    start = text_content.find('{')
-                    end = text_content.rfind('}') + 1
-                    data = json.loads(text_content[start:end])
-                except:
-                    st.error("Veri okunamadı. Ham yanıt:")
-                    st.write(text_content)
-                    st.stop()
+        # Resimleri Base64 yapıp ekle
+        if hemo_file:
+            content_parts.append({"inline_data": {"mime_type": "image/png", "data": image_to_base64(Image.open(hemo_file))}})
+        if bio_file:
+            content_parts.append({"inline_data": {"mime_type": "image/png", "data": image_to_base64(Image.open(bio_file))}})
+
+        # --- MOTOR SEÇİMİ: Gemini 2.0 Flash ---
+        # Listende vardı: 'models/gemini-2.0-flash'
+        # Bu model OCR konusunda çok daha keskindir.
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={API_KEY}"
+        
+        headers = {'Content-Type': 'application/json'}
+        payload = {"contents": [{"parts": content_parts}]}
+        
+        # İsteği Gönder
+        response = requests.post(url, headers=headers, json=payload)
+        
+        if response.status_code == 200:
+            result = response.json()
+            try:
+                # Metni temizle
+                raw_text = result['candidates'][0]['content']['parts'][0]['text']
+                clean_json = raw_text.replace("```json", "").replace("```", "").strip()
                 
-                st.subheader(f"Hasta: {data.get('ID')}")
+                # Bazen JSON'ın dışına açıklama yazar, sadece { } arasını alalım
+                start = clean_json.find('{')
+                end = clean_json.rfind('}') + 1
+                if start != -1 and end != -1:
+                    clean_json = clean_json[start:end]
                 
-                cols = st.columns(4)
-                cols[0].metric("HGB", data.get("HGB"))
-                cols[1].metric("PLT", data.get("PLT"))
-                cols[2].metric("CRP", data.get("CRP"))
-                cols[3].metric("Prokalsitonin", data.get("Prokalsitonin"))
+                data = json.loads(clean_json)
                 
-                with st.expander("Detaylı JSON Verisi"):
+                status_text.success("Analiz Tamamlandı!")
+                
+                # --- SONUÇLARI GÖSTER (Kontrol Paneli) ---
+                st.subheader(f"👤 Hasta: {data.get('ID', 'Belirsiz')}")
+                
+                # Grid Görünümü
+                c1, c2, c3, c4, c5 = st.columns(5)
+                c1.metric("HGB", data.get("HGB"))
+                c2.metric("PLT", data.get("PLT"))
+                c3.metric("RDW", data.get("RDW"))
+                c4.metric("CRP", data.get("CRP"))
+                c5.metric("Prokalsitonin", data.get("Prokalsitonin"))
+                
+                c6, c7, c8 = st.columns(3)
+                c6.metric("NEU#", data.get("NEUT_HASH"))
+                c7.metric("LYM#", data.get("LYMPH_HASH"))
+                c8.metric("IG#", data.get("IG_HASH"))
+
+                # Detaylı JSON (Debug için gizli)
+                with st.expander("Ham Veriyi Gör (Hata Varsa Buraya Bak)"):
                     st.json(data)
+                    st.text("Modelin Ham Yanıtı:")
+                    st.code(raw_text)
 
-                # Google Sheets
+                # --- EXCEL KAYDI ---
                 sheet = client.open(SHEET_NAME).sheet1
                 row = [
                     data.get("ID"),
@@ -153,11 +181,15 @@ if st.button("Analiz Et", type="primary"):
                     data.get("Prokalsitonin")
                 ]
                 sheet.append_row(row)
-                st.success("✅ Tabloya Eklendi!")
+                st.toast("✅ Excel'e Kaydedildi!", icon="💾")
                 
-            else:
-                st.error(f"Sunucu Hatası: {response.status_code}")
-                st.write(response.text)
+            except Exception as parse_error:
+                status_text.error("Veri okunamadı! Modelin yanıtı bozuk olabilir.")
+                st.error(f"Hata Detayı: {parse_error}")
+                st.write("Gelen Ham Veri:", result)
+        else:
+            status_text.error(f"Sunucu Hatası: {response.status_code}")
+            st.write(response.text)
 
-        except Exception as e:
-            st.error(f"Hata: {e}")
+    except Exception as e:
+        st.error(f"Kritik Hata: {e}")
