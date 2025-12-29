@@ -10,20 +10,20 @@ import base64
 import io
 import re
 
-# --- 1. AYARLAR ---
+# --- 1. AYARLAR VE GÜVENLİK ---
 st.set_page_config(page_title="Hasta Takip Asistanı", page_icon="🩸")
 
 try:
     if "GEMINI_API_KEY" in st.secrets:
         API_KEY = st.secrets["GEMINI_API_KEY"]
     else:
-        st.error("API Key eksik! Secrets ayarlarını kontrol et.")
+        st.error("HATA: API Key bulunamadı! Secrets ayarlarını kontrol edin.")
         st.stop()
         
     if "gcp_service_account" in st.secrets:
         sheets_secrets = st.secrets["gcp_service_account"]
     else:
-        st.error("Google Sheets yetkisi eksik! Secrets ayarlarını kontrol et.")
+        st.error("HATA: Google Sheets yetkisi eksik! Secrets ayarlarını kontrol edin.")
         st.stop()
 except Exception as e:
     st.error(f"Ayar hatası: {e}")
@@ -34,6 +34,7 @@ try:
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds = ServiceAccountCredentials.from_json_keyfile_dict(sheets_secrets, scope)
     client = gspread.authorize(creds)
+    # Excel dosyasının adı tam olarak bu olmalı
     SHEET_NAME = "Hasta Takip" 
 except Exception as e:
     st.error(f"Google Sheets Bağlantı Hatası: {e}")
@@ -47,58 +48,82 @@ def image_to_base64(image):
 
 # --- 4. ARAYÜZ ---
 st.title("🩸 Hasta Takip (Gemini 2.5 Pro)")
-st.info("Model: Gemini 2.5 Pro (Listenizdeki En Zeki Model Seçildi)")
+st.info("CRP ve Referans Ayrımı Güçlendirilmiş Mod")
 
 col1, col2 = st.columns(2)
+
 with col1:
     hemo_file = st.file_uploader("1. Hemogram Yükle", type=["jpg", "png", "jpeg"], key="hemo")
+
 with col2:
     bio_file = st.file_uploader("2. Biyokimya Yükle", type=["jpg", "png", "jpeg"], key="bio")
 
-if st.button("Analiz Et", type="primary"):
+# --- 5. ANALİZ VE İŞLEME ---
+if st.button("Analiz Et ve Tabloya Yaz", type="primary"):
+    
     if not hemo_file and not bio_file:
-        st.warning("Dosya seçilmedi.")
+        st.warning("Lütfen en az bir dosya yükleyin.")
         st.stop()
 
-    with st.spinner('Gemini 2.5 Pro, referans aralıklarını eliyor...'):
+    with st.spinner('Yapay zeka (Gemini 2.5 Pro) analiz ediyor...'):
         try:
             content_parts = []
             
-            # --- GELİŞTİRİLMİŞ 'DEDEKTİF' EMRİ (PROMPT) ---
-            # Bu prompt, modele önce satırı analiz ettirir, sonra karar verdirir.
+            # --- GELİŞTİRİLMİŞ PROMPT (EMİR) ---
             prompt_text = """
-            Sen laboratuvar sonuçlarını okuyan bir uzmansın.
+            Sen uzman bir laboratuvar asistanısın. Görevin resimdeki değerleri okumak.
             
-            GÖREV: Aşağıdaki parametrelerin SADECE 'SONUÇ' (RESULT) değerlerini bul.
+            HEDEF: Aşağıdaki parametrelerin 'SONUÇ' (RESULT) değerlerini bul ve JSON yap.
             
-            KRİTİK HATA ÖNLEME KURALLARI:
-            1. Laboratuvar kağıtlarında genelde 3 sayı yan yana yazar: "Sonuç", "Ünite", "Referans Aralığı".
-            2. "Referans Aralığı" sütununda genelde tire (-) işareti olur (Örn: 11.5 - 15.5). BU SAYIYI ASLA ALMA.
-            3. Eğer bir satırda "5.1" ve "13.5" görüyorsan; hangisinin "Normal Değer" (Referans) olduğuna bak ve onu at. Diğerini (Hastanın değerini) al.
-            4. HGB (Hemoglobin) için: Eğer değer 5.1 ise ve referans 13.0 ise, 5.1'i al.
+            KRİTİK KURALLAR (Referans vs Sonuç Ayrımı):
+            1. Laboratuvar kağıtlarında "Sonuç" ve "Referans Aralığı" yanyana yazar.
+            2. Referans aralıkları genelde tire (-) içerir (Örn: 11.5 - 15.5). BU SAYILARI ASLA ALMA.
+            3. Senin alacağın sayı "Sonuç" sütunundadır ve genelde TEK bir sayıdır (Örn: 13.2).
             
-            ÇIKTI FORMATI (SADECE JSON):
+            ÖZEL DURUM (CRP ve Prokalsitonin):
+            - Bazen sonuç değeri, referans limitiyle aynı olabilir veya çok yakın olabilir.
+            - Örn: Sonuç "5" ve Referans "<5". Bu durumda "5" değerini SONUÇ olarak al. "null" yazma!
+            - Değer var olduğu sürece, referansa benzese bile onu al.
+            
+            KİMLİK TESPİTİ:
+            - Sol üst köşedeki Hasta Adı Soyadı veya Protokol Numarasını 'ID' hanesine yaz.
+            
+            İSTENEN JSON FORMATI:
             {
-                "ID": "Hasta Adı veya Protokol No (Sol üstten)",
-                "HGB": "Sayı",
-                "PLT": "Sayı",
+                "ID": "Hasta Adı",
+                "HGB": "Sayı (Hemoglobin)",
+                "PLT": "Sayı (Trombosit)",
                 "RDW": "Sayı",
-                "NEUT_HASH": "Nötrofil Mutlak (#) Değeri (% değil)",
-                "LYMPH_HASH": "Lenfosit Mutlak (#) Değeri",
-                "IG_HASH": "IG Mutlak (#) Değeri (yoksa null)",
-                "CRP": "Sayı",
+                "NEUT_HASH": "Sayı (Nötrofil Mutlak/#)",
+                "LYMPH_HASH": "Sayı (Lenfosit Mutlak/#)",
+                "IG_HASH": "Sayı (İmmatür Granülosit/# - Yoksa null)",
+                "CRP": "Sayı (CRP Sonucu)",
                 "Prokalsitonin": "Sayı"
             }
             """
+            
             content_parts.append({"text": prompt_text})
 
+            # Resimleri Ekle
             if hemo_file:
-                content_parts.append({"inline_data": {"mime_type": "image/png", "data": image_to_base64(Image.open(hemo_file))}})
-            if bio_file:
-                content_parts.append({"inline_data": {"mime_type": "image/png", "data": image_to_base64(Image.open(bio_file))}})
+                content_parts.append({
+                    "inline_data": {
+                        "mime_type": "image/png",
+                        "data": image_to_base64(Image.open(hemo_file))
+                    }
+                })
 
-            # --- MODEL SEÇİMİ: Listenizdeki 'gemini-2.5-pro' ---
+            if bio_file:
+                content_parts.append({
+                    "inline_data": {
+                        "mime_type": "image/png",
+                        "data": image_to_base64(Image.open(bio_file))
+                    }
+                })
+
+            # --- API İSTEĞİ (Gemini 2.5 Pro) ---
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={API_KEY}"
+            
             headers = {'Content-Type': 'application/json'}
             payload = {"contents": [{"parts": content_parts}]}
             
@@ -106,36 +131,37 @@ if st.button("Analiz Et", type="primary"):
             
             if response.status_code == 200:
                 result = response.json()
-                # Yanıtı çözümle
-                text_content = result['candidates'][0]['content']['parts'][0]['text']
-                text_content = text_content.replace("```json", "").replace("```", "").strip()
                 
-                # Bazen model açıklama yapar, sadece süslü parantez arasını alalım
+                # Yanıtı çözümle
                 try:
-                    start = text_content.find('{')
-                    end = text_content.rfind('}') + 1
-                    json_str = text_content[start:end]
+                    text_content = result['candidates'][0]['content']['parts'][0]['text']
+                    # Markdown temizliği
+                    text_content = text_content.replace("```json", "").replace("```", "").strip()
+                    # JSON'ı bul (Bazen AI gevezelik edip başına sonuna yazı ekleyebilir)
+                    start_index = text_content.find('{')
+                    end_index = text_content.rfind('}') + 1
+                    json_str = text_content[start_index:end_index]
+                    
                     data = json.loads(json_str)
-                except:
-                    st.error("AI yanıtı JSON formatına uymadı. Ham yanıt:")
-                    st.write(text_content)
+                except Exception as parse_err:
+                    st.error("AI yanıtı okunamadı. Ham yanıt aşağıda:")
+                    st.text(text_content)
                     st.stop()
                 
-                # --- VERİ KONTROL VE TEMİZLİK ---
-                # Burada Python ile son bir filtre yapabiliriz (opsiyonel)
+                # --- EKRAN KONTROLÜ ---
+                st.subheader(f"Bulunan Hasta: {data.get('ID', '---')}")
                 
-                st.subheader(f"Hasta: {data.get('ID')}")
+                # Sonuçları göster (Gözle kontrol için)
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("HGB", data.get("HGB"))
+                c2.metric("PLT", data.get("PLT"))
+                c3.metric("CRP", data.get("CRP"))
+                c4.metric("Prokalsitonin", data.get("Prokalsitonin"))
                 
-                # Ekrana basarak kontrol etmeni sağlayalım
-                cols = st.columns(4)
-                cols[0].metric("HGB", data.get("HGB"))
-                cols[1].metric("PLT", data.get("PLT"))
-                cols[2].metric("CRP", data.get("CRP"))
-                cols[3].metric("Prokalsitonin", data.get("Prokalsitonin"))
+                with st.expander("Tüm Veriyi Gör"):
+                    st.json(data)
                 
-                st.json(data)
-
-                # Google Sheets'e Yaz
+                # --- GOOGLE SHEETS KAYDI ---
                 sheet = client.open(SHEET_NAME).sheet1
                 row = [
                     data.get("ID"),
@@ -148,12 +174,14 @@ if st.button("Analiz Et", type="primary"):
                     data.get("CRP"),
                     data.get("Prokalsitonin")
                 ]
+                
                 sheet.append_row(row)
-                st.success("✅ Tabloya Eklendi!")
-
+                st.balloons()
+                st.success("✅ Veriler Google E-Tablosuna başarıyla işlendi!")
+                
             else:
                 st.error(f"Sunucu Hatası: {response.status_code}")
                 st.write(response.text)
 
         except Exception as e:
-            st.error(f"Bir hata oluştu: {e}")
+            st.error(f"Beklenmeyen bir hata oluştu: {e}")
