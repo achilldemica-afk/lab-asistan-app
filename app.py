@@ -8,6 +8,7 @@ from PIL import Image
 import requests
 import base64
 import io
+import re
 
 # --- 1. AYARLAR ---
 st.set_page_config(page_title="Hasta Takip Asistanı", page_icon="🩸")
@@ -38,85 +39,66 @@ except Exception as e:
     st.error(f"Google Sheets Bağlantı Hatası: {e}")
     st.stop()
 
-# --- 3. YARDIMCI FONKSİYON ---
+# --- 3. YARDIMCI FONKSİYONLAR ---
 def image_to_base64(image):
     buffered = io.BytesIO()
     image.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
 # --- 4. ARAYÜZ ---
-st.title("🩸 Hasta Takip & Veri Girişi (V3 - Sütun Korumalı)")
-st.info("Akıllı Sütun Tespiti Aktif: Referans aralıkları filtreleniyor.")
+st.title("🩸 Hasta Takip (Gemini 2.5 Pro)")
+st.info("Model: Gemini 2.5 Pro (Listenizdeki En Zeki Model Seçildi)")
 
 col1, col2 = st.columns(2)
-
 with col1:
-    hemo_file = st.file_uploader("1. Hemogram (Mor Tüp)", type=["jpg", "png", "jpeg"], key="hemo")
-
+    hemo_file = st.file_uploader("1. Hemogram Yükle", type=["jpg", "png", "jpeg"], key="hemo")
 with col2:
-    bio_file = st.file_uploader("2. Biyokimya (Sarı Tüp)", type=["jpg", "png", "jpeg"], key="bio")
+    bio_file = st.file_uploader("2. Biyokimya Yükle", type=["jpg", "png", "jpeg"], key="bio")
 
-if st.button("Analiz Et ve Tabloya Yaz", type="primary"):
-    
+if st.button("Analiz Et", type="primary"):
     if not hemo_file and not bio_file:
-        st.warning("Lütfen en az bir sonuç kağıdı yükleyin.")
+        st.warning("Dosya seçilmedi.")
         st.stop()
 
-    with st.spinner('Tablo sütunları ayrıştırılıyor...'):
+    with st.spinner('Gemini 2.5 Pro, referans aralıklarını eliyor...'):
         try:
             content_parts = []
             
-            # --- KRİTİK DEĞİŞİKLİK: PROMPT (EMİR) GÜNCELLENDİ ---
+            # --- GELİŞTİRİLMİŞ 'DEDEKTİF' EMRİ (PROMPT) ---
+            # Bu prompt, modele önce satırı analiz ettirir, sonra karar verdirir.
             prompt_text = """
-            Sen laboratuvar sonuçlarını okuyan dikkatli bir uzmansın.
+            Sen laboratuvar sonuçlarını okuyan bir uzmansın.
             
-            ÖNEMLİ UYARI:
-            Bu kağıtlarda birden fazla sayı sütunu vardır (Sonuç, Ünite, Referans Aralığı).
-            Senin görevin SADECE 'Sonuç' (Result) sütununu okumaktır.
+            GÖREV: Aşağıdaki parametrelerin SADECE 'SONUÇ' (RESULT) değerlerini bul.
             
-            KURALLAR:
-            1. **Sütun Ayrımı:** 'Referans Aralığı' (Reference Range / Normal Değerler) sütunundaki sayıları ASLA okuma. Bu sütunda genelde tire (-) işareti olur (örn: 11.5 - 15.5). Bunları görmezden gel.
-            2. **Doğru Değer:** Sadece hastanın o anki ölçüm değerini al.
-            3. **HGB Örneği:** Eğer HGB satırında "5.1" ve yanında "11.5-15.5" yazıyorsa, bana "5.1" değerini ver. "11.5" veya "13.5" gibi referans sayılarını verme.
-            4. **Kimlik:** Sol üstteki Hasta Adını 'ID' olarak al.
+            KRİTİK HATA ÖNLEME KURALLARI:
+            1. Laboratuvar kağıtlarında genelde 3 sayı yan yana yazar: "Sonuç", "Ünite", "Referans Aralığı".
+            2. "Referans Aralığı" sütununda genelde tire (-) işareti olur (Örn: 11.5 - 15.5). BU SAYIYI ASLA ALMA.
+            3. Eğer bir satırda "5.1" ve "13.5" görüyorsan; hangisinin "Normal Değer" (Referans) olduğuna bak ve onu at. Diğerini (Hastanın değerini) al.
+            4. HGB (Hemoglobin) için: Eğer değer 5.1 ise ve referans 13.0 ise, 5.1'i al.
             
-            ÇIKARILACAK JSON VERİSİ:
+            ÇIKTI FORMATI (SADECE JSON):
             {
-                "ID": "Hasta Adı",
-                "HGB": "Sadece SONUÇ değeri (Referans değil!)",
-                "PLT": "Sadece SONUÇ değeri",
-                "RDW": "Sadece SONUÇ değeri",
-                "NEUT_HASH": "Nötrofil Mutlak (#) Değeri",
+                "ID": "Hasta Adı veya Protokol No (Sol üstten)",
+                "HGB": "Sayı",
+                "PLT": "Sayı",
+                "RDW": "Sayı",
+                "NEUT_HASH": "Nötrofil Mutlak (#) Değeri (% değil)",
                 "LYMPH_HASH": "Lenfosit Mutlak (#) Değeri",
                 "IG_HASH": "IG Mutlak (#) Değeri (yoksa null)",
-                "CRP": "CRP Sonucu",
-                "Prokalsitonin": "Prokalsitonin Sonucu"
+                "CRP": "Sayı",
+                "Prokalsitonin": "Sayı"
             }
             """
-            
             content_parts.append({"text": prompt_text})
 
             if hemo_file:
-                img_hemo = Image.open(hemo_file)
-                content_parts.append({
-                    "inline_data": {
-                        "mime_type": "image/png",
-                        "data": image_to_base64(img_hemo)
-                    }
-                })
-
+                content_parts.append({"inline_data": {"mime_type": "image/png", "data": image_to_base64(Image.open(hemo_file))}})
             if bio_file:
-                img_bio = Image.open(bio_file)
-                content_parts.append({
-                    "inline_data": {
-                        "mime_type": "image/png",
-                        "data": image_to_base64(img_bio)
-                    }
-                })
+                content_parts.append({"inline_data": {"mime_type": "image/png", "data": image_to_base64(Image.open(bio_file))}})
 
-            # Modeli 1.5 PRO'ya çekiyoruz (Bazen 2.5 fazla 'yaratıcı' olup hata yapabiliyor, 1.5 talimatlara daha sadık)
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key={API_KEY}"
-            
+            # --- MODEL SEÇİMİ: Listenizdeki 'gemini-2.5-pro' ---
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={API_KEY}"
             headers = {'Content-Type': 'application/json'}
             payload = {"contents": [{"parts": content_parts}]}
             
@@ -124,20 +106,36 @@ if st.button("Analiz Et ve Tabloya Yaz", type="primary"):
             
             if response.status_code == 200:
                 result = response.json()
+                # Yanıtı çözümle
                 text_content = result['candidates'][0]['content']['parts'][0]['text']
                 text_content = text_content.replace("```json", "").replace("```", "").strip()
-                data = json.loads(text_content)
                 
-                st.subheader(f"Bulunan Hasta: {data.get('ID', '---')}")
+                # Bazen model açıklama yapar, sadece süslü parantez arasını alalım
+                try:
+                    start = text_content.find('{')
+                    end = text_content.rfind('}') + 1
+                    json_str = text_content[start:end]
+                    data = json.loads(json_str)
+                except:
+                    st.error("AI yanıtı JSON formatına uymadı. Ham yanıt:")
+                    st.write(text_content)
+                    st.stop()
                 
-                # Kontrol amaçlı ekrana da basalım
-                c1, c2, c3 = st.columns(3)
-                c1.metric("HGB (Kontrol Et)", data.get("HGB"))
-                c2.metric("PLT", data.get("PLT"))
-                c3.metric("CRP", data.get("CRP"))
+                # --- VERİ KONTROL VE TEMİZLİK ---
+                # Burada Python ile son bir filtre yapabiliriz (opsiyonel)
+                
+                st.subheader(f"Hasta: {data.get('ID')}")
+                
+                # Ekrana basarak kontrol etmeni sağlayalım
+                cols = st.columns(4)
+                cols[0].metric("HGB", data.get("HGB"))
+                cols[1].metric("PLT", data.get("PLT"))
+                cols[2].metric("CRP", data.get("CRP"))
+                cols[3].metric("Prokalsitonin", data.get("Prokalsitonin"))
                 
                 st.json(data)
-                
+
+                # Google Sheets'e Yaz
                 sheet = client.open(SHEET_NAME).sheet1
                 row = [
                     data.get("ID"),
@@ -150,13 +148,12 @@ if st.button("Analiz Et ve Tabloya Yaz", type="primary"):
                     data.get("CRP"),
                     data.get("Prokalsitonin")
                 ]
-                
                 sheet.append_row(row)
-                st.success(f"✅ Kaydedildi!")
-                
+                st.success("✅ Tabloya Eklendi!")
+
             else:
                 st.error(f"Sunucu Hatası: {response.status_code}")
                 st.write(response.text)
 
         except Exception as e:
-            st.error(f"Hata oluştu: {e}")
+            st.error(f"Bir hata oluştu: {e}")
