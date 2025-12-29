@@ -45,8 +45,8 @@ def image_to_base64(image):
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
 # --- 4. ARAYÜZ ---
-st.title("🩸 Hasta Takip & Veri Girişi")
-st.success("Aktif Model: Gemini 2.5 PRO (Yüksek Hassasiyet Modu)")
+st.title("🩸 Hasta Takip & Veri Girişi (V3 - Sütun Korumalı)")
+st.info("Akıllı Sütun Tespiti Aktif: Referans aralıkları filtreleniyor.")
 
 col1, col2 = st.columns(2)
 
@@ -62,32 +62,36 @@ if st.button("Analiz Et ve Tabloya Yaz", type="primary"):
         st.warning("Lütfen en az bir sonuç kağıdı yükleyin.")
         st.stop()
 
-    with st.spinner('Yapay zeka (Pro) dikkatlice inceliyor...'):
+    with st.spinner('Tablo sütunları ayrıştırılıyor...'):
         try:
             content_parts = []
             
-            # --- GELİŞTİRİLMİŞ EMRİNİZ (PROMPT) ---
+            # --- KRİTİK DEĞİŞİKLİK: PROMPT (EMİR) GÜNCELLENDİ ---
             prompt_text = """
-            Sen son derece titiz bir tıbbi veri uzmanısın. Yüklenen laboratuvar sonuçlarını incele.
+            Sen laboratuvar sonuçlarını okuyan dikkatli bir uzmansın.
             
-            GÖREVLER VE KURALLAR:
-            1. **Sayısal Hassasiyet:** Rakamları okurken OCR hatalarına düşme. Nokta (.) ve Virgül (,) ayrımına çok dikkat et.
-            2. **Kimlik:** Resmin sol üst köşesindeki Hasta Adı Soyadı veya Protokol numarasını bul ve 'ID' olarak al.
-            3. **Format:** Sonucu sadece JSON formatında ver.
+            ÖNEMLİ UYARI:
+            Bu kağıtlarda birden fazla sayı sütunu vardır (Sonuç, Ünite, Referans Aralığı).
+            Senin görevin SADECE 'Sonuç' (Result) sütununu okumaktır.
             
-            İSTENEN JSON ALANLARI:
+            KURALLAR:
+            1. **Sütun Ayrımı:** 'Referans Aralığı' (Reference Range / Normal Değerler) sütunundaki sayıları ASLA okuma. Bu sütunda genelde tire (-) işareti olur (örn: 11.5 - 15.5). Bunları görmezden gel.
+            2. **Doğru Değer:** Sadece hastanın o anki ölçüm değerini al.
+            3. **HGB Örneği:** Eğer HGB satırında "5.1" ve yanında "11.5-15.5" yazıyorsa, bana "5.1" değerini ver. "11.5" veya "13.5" gibi referans sayılarını verme.
+            4. **Kimlik:** Sol üstteki Hasta Adını 'ID' olarak al.
+            
+            ÇIKARILACAK JSON VERİSİ:
             {
-                "ID": "Hasta Adı veya TC",
-                "HGB": "Hemoglobin değeri (Sayı)",
-                "PLT": "Trombosit değeri (Sayı)",
-                "RDW": "RDW değeri (Sayı)",
-                "NEUT_HASH": "Nötrofil MUTLAK sayısı (Genelde NEU# veya #NEU yazar, % değil)",
-                "LYMPH_HASH": "Lenfosit MUTLAK sayısı (LYM#)",
-                "IG_HASH": "İmmatür Granülosit (IG#). Yoksa null.",
-                "CRP": "CRP değeri",
-                "Prokalsitonin": "Prokalsitonin değeri"
+                "ID": "Hasta Adı",
+                "HGB": "Sadece SONUÇ değeri (Referans değil!)",
+                "PLT": "Sadece SONUÇ değeri",
+                "RDW": "Sadece SONUÇ değeri",
+                "NEUT_HASH": "Nötrofil Mutlak (#) Değeri",
+                "LYMPH_HASH": "Lenfosit Mutlak (#) Değeri",
+                "IG_HASH": "IG Mutlak (#) Değeri (yoksa null)",
+                "CRP": "CRP Sonucu",
+                "Prokalsitonin": "Prokalsitonin Sonucu"
             }
-            Değer kağıtta yoksa "null" yaz.
             """
             
             content_parts.append({"text": prompt_text})
@@ -110,9 +114,8 @@ if st.button("Analiz Et ve Tabloya Yaz", type="primary"):
                     }
                 })
 
-            # --- MODEL DEĞİŞİKLİĞİ BURADA YAPILDI ---
-            # Eski: gemini-2.5-flash -> Yeni: gemini-2.5-pro
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={API_KEY}"
+            # Modeli 1.5 PRO'ya çekiyoruz (Bazen 2.5 fazla 'yaratıcı' olup hata yapabiliyor, 1.5 talimatlara daha sadık)
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key={API_KEY}"
             
             headers = {'Content-Type': 'application/json'}
             payload = {"contents": [{"parts": content_parts}]}
@@ -125,10 +128,16 @@ if st.button("Analiz Et ve Tabloya Yaz", type="primary"):
                 text_content = text_content.replace("```json", "").replace("```", "").strip()
                 data = json.loads(text_content)
                 
-                st.subheader(f"Hasta: {data.get('ID', 'Bulunamadı')}")
+                st.subheader(f"Bulunan Hasta: {data.get('ID', '---')}")
+                
+                # Kontrol amaçlı ekrana da basalım
+                c1, c2, c3 = st.columns(3)
+                c1.metric("HGB (Kontrol Et)", data.get("HGB"))
+                c2.metric("PLT", data.get("PLT"))
+                c3.metric("CRP", data.get("CRP"))
+                
                 st.json(data)
                 
-                # Excel Kaydı
                 sheet = client.open(SHEET_NAME).sheet1
                 row = [
                     data.get("ID"),
@@ -143,8 +152,7 @@ if st.button("Analiz Et ve Tabloya Yaz", type="primary"):
                 ]
                 
                 sheet.append_row(row)
-                st.balloons()
-                st.success(f"✅ Kayıt Başarılı! (Kullanılan Model: Gemini 2.5 PRO)")
+                st.success(f"✅ Kaydedildi!")
                 
             else:
                 st.error(f"Sunucu Hatası: {response.status_code}")
