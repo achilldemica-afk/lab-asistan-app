@@ -10,24 +10,25 @@ from sklearn.preprocessing import MinMaxScaler
 from tableone import TableOne
 import umap.umap_ as umap
 
-# --- AYARLAR ---
-st.set_page_config(page_title="İmmün Topoloji", page_icon="🧬", layout="wide")
+# --- 1. AYARLAR ---
+st.set_page_config(page_title="İmmün Topoloji & Analiz", page_icon="🧬", layout="wide")
 
-# --- GÜVENLİK VE BAĞLANTI ---
+# --- 2. GÜVENLİK VE BAĞLANTI ---
 try:
     if "gcp_service_account" in st.secrets:
         sheets_secrets = st.secrets["gcp_service_account"]
     else:
-        st.error("Google Sheets yetkisi eksik!")
+        st.error("Google Sheets yetkisi eksik! Secrets ayarlarını kontrol edin.")
         st.stop()
 except Exception as e:
     st.error(f"Ayar hatası: {e}")
     st.stop()
 
-# --- VERİ ÇEKME ---
+# --- 3. VERİ ÇEKME FONKSİYONU ---
 @st.cache_data(ttl=60)
 def load_data():
     try:
+        # Bağlantı
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(sheets_secrets, scope)
         client = gspread.authorize(creds)
@@ -36,75 +37,95 @@ def load_data():
         data = sheet.get_all_records()
         df = pd.DataFrame(data)
         
-        numeric_cols = ["HGB", "PLT", "RDW", "NEUT_HASH", "LYMPH_HASH", "IG_HASH", "CRP", "Prokalsitonin"]
-        for col in numeric_cols:
+        # Sayısal Temizlik
+        # Olası sütun isimlerini buraya ekledik
+        target_cols = ["HGB", "PLT", "RDW", "NEUT_HASH", "LYMPH_HASH", "IG_HASH", "CRP", "Prokalsitonin", "NEU#", "LYM#", "IG#"]
+        
+        for col in target_cols:
             if col in df.columns:
+                # Stringe çevir -> Virgülleri nokta yap -> Sayıya çevir
                 df[col] = df[col].astype(str).str.replace(',', '.', regex=False)
                 df[col] = pd.to_numeric(df[col], errors='coerce')
         
-        # İndeksler
-        if "NEUT_HASH" in df.columns and "LYMPH_HASH" in df.columns:
-            df["NLR"] = df["NEUT_HASH"] / df["LYMPH_HASH"]
-        if "PLT" in df.columns and "LYMPH_HASH" in df.columns:
-            df["PLR"] = df["PLT"] / df["LYMPH_HASH"]
-        if "PLT" in df.columns and "NEUT_HASH" in df.columns and "LYMPH_HASH" in df.columns:
-             df["SII"] = (df["PLT"] * df["NEUT_HASH"]) / df["LYMPH_HASH"]
+        # --- İndeks Hesaplamaları (Varsa Hesapla) ---
+        # 1. NLR (Neutrophil / Lymphocyte)
+        # Sütun adı NEUT_HASH mi yoksa NEU# mi kontrol et
+        neu_col = "NEUT_HASH" if "NEUT_HASH" in df.columns else ("NEU#" if "NEU#" in df.columns else None)
+        lym_col = "LYMPH_HASH" if "LYMPH_HASH" in df.columns else ("LYM#" if "LYM#" in df.columns else None)
+        
+        if neu_col and lym_col:
+            df["NLR"] = df[neu_col] / df[lym_col]
+
+        # 2. PLR (Platelet / Lymphocyte)
+        if "PLT" in df.columns and lym_col:
+            df["PLR"] = df["PLT"] / df[lym_col]
+
+        # 3. SII (Systemic Immune-Inflammation Index)
+        if "PLT" in df.columns and neu_col and lym_col:
+             df["SII"] = (df["PLT"] * df[neu_col]) / df[lym_col]
 
         return df
     except Exception as e:
         st.error(f"Veri çekme hatası: {e}")
         return pd.DataFrame()
 
-# --- ARAYÜZ ---
-st.title("🧬 İmmün Sistemin Geometrisi")
+# --- 4. ARAYÜZ ---
+st.title("🧬 İmmün Sistemin Geometrisi ve Analizi")
 
 df = load_data()
 
 if not df.empty:
-    # Sadece sayısal sütunlar (ID hariç)
+    # Sadece sayısal olan sütunları al (İsim, ID hariç)
     numeric_columns = df.select_dtypes(include=['float64', 'int64']).columns.tolist()
     
-    # NaN temizliği (UMAP ve Radar için boşluk olmamalı)
-    df_clean = df.dropna(subset=numeric_columns)
+    # Veri Temizliği (Boşlukları at, yoksa UMAP ve Radar çalışmaz)
+    df_clean = df.dropna(subset=[c for c in numeric_columns if c in df.columns])
 
-    tab1, tab2, tab3 = st.tabs(["🗺️ UMAP & Fenotip Haritası", "🕸️ Radar (Şekil) Analizi", "📋 Tablolar"])
+    # Sekmeler
+    tab1, tab2, tab3 = st.tabs(["🗺️ UMAP (Harita)", "🕸️ Radar (Şekil)", "📋 Tablolar & Jamovi"])
 
     # ==========================================
-    # SEKME 1: UMAP İLE DOĞRULAMA
+    # SEKME 1: UMAP & FENOTİP HARİTASI
     # ==========================================
     with tab1:
-        st.markdown("### Hipotez Kontrolü: NLR gerçekten belirleyici mi?")
-        st.info("UMAP algoritması, hastaları kan değerlerine göre gruplar. Eğer 'NLR'ye göre renklendirdiğimizde düzenli bir geçiş (gradient) görüyorsak, sıralama mantıklıdır.")
+        st.markdown("### Hipotez Kontrolü")
+        st.info("Benzer hastalar bir arada mı duruyor? NLR renk geçişi düzenli mi?")
 
-        if len(df_clean) > 5: # UMAP için en az 5-10 veri lazım
-            # 1. Veriyi Normalize Et (0-1 arasına sıkıştır)
-            scaler = MinMaxScaler()
-            scaled_data = scaler.fit_transform(df_clean[numeric_columns])
-            
-            # 2. UMAP Çalıştır
-            reducer = umap.UMAP(n_neighbors=5, min_dist=0.3, random_state=42)
-            embedding = reducer.fit_transform(scaled_data)
-            
-            df_clean['UMAP_X'] = embedding[:, 0]
-            df_clean['UMAP_Y'] = embedding[:, 1]
-            
-            # 3. Görselleştir
-            color_by = st.selectbox("Renklendirme Kriteri", ["NLR", "CRP", "PLT", "HGB"], index=0)
-            
-            fig_umap = px.scatter(
-                df_clean, x='UMAP_X', y='UMAP_Y',
-                color=color_by,
-                hover_data=['ID', 'NLR', 'CRP'],
-                color_continuous_scale='Turbo',
-                title=f"Hasta Evreni ({color_by} Dağılımı)"
-            )
-            st.plotly_chart(fig_umap, use_container_width=True)
-            
-            st.markdown("""
-            **Nasıl Okunmalı?**
-            * Noktalar birbirine yakınsa, o hastaların kan tabloları birbirine benziyor demektir.
-            * Eğer renkler (NLR değerleri) harita üzerinde dağınık değil de bir uçtan bir uca düzenli değişiyorsa, **NLR dominant bir faktördür.**
-            """)
+        if len(df_clean) > 5:
+            try:
+                # UMAP için veriyi hazırla
+                # Sadece mevcut sayısal sütunları kullan
+                features = [c for c in numeric_columns if c in df_clean.columns and c not in ['UMAP_X', 'UMAP_Y']]
+                
+                if len(features) > 2:
+                    scaler = MinMaxScaler()
+                    scaled_data = scaler.fit_transform(df_clean[features])
+                    
+                    reducer = umap.UMAP(n_neighbors=5, min_dist=0.3, random_state=42)
+                    embedding = reducer.fit_transform(scaled_data)
+                    
+                    df_clean['UMAP_X'] = embedding[:, 0]
+                    df_clean['UMAP_Y'] = embedding[:, 1]
+                    
+                    # Renklendirme seçeneği
+                    valid_colors = [c for c in ["NLR", "CRP", "PLT", "SII"] if c in df_clean.columns]
+                    color_by = st.selectbox("Renklendirme Kriteri", valid_colors, index=0 if valid_colors else None)
+                    
+                    if color_by:
+                        fig_umap = px.scatter(
+                            df_clean, x='UMAP_X', y='UMAP_Y',
+                            color=color_by,
+                            hover_data=['ID'],
+                            color_continuous_scale='Turbo',
+                            title=f"Hasta Evreni ({color_by} Dağılımı)"
+                        )
+                        st.plotly_chart(fig_umap, use_container_width=True)
+                    else:
+                        st.warning("Renklendirme için uygun sütun bulunamadı (NLR hesaplanamamış olabilir).")
+                else:
+                    st.warning("Yeterli parametre yok.")
+            except Exception as e:
+                st.error(f"UMAP Hatası: {e}")
         else:
             st.warning("UMAP analizi için en az 5-10 hasta verisi gerekiyor.")
 
@@ -113,86 +134,107 @@ if not df.empty:
     # ==========================================
     with tab2:
         st.markdown("### 🕸️ Şekil Değişimi (Shape Deformation)")
-        st.markdown("Hastaları NLR oranına göre sıraya dizdik. Slider'ı kaydırarak immünitenin şekil değiştirmesini izle.")
+        
+        # --- HATA ÖNLEYİCİ AKILLI SEÇİM ---
+        # 1. Kodun çökmesini önlemek için varsayılan listeyi kontrol et
+        desired_defaults = ["HGB", "PLT", "NEUT_HASH", "LYMPH_HASH", "CRP", "RDW", "NEU#", "LYM#"]
+        valid_defaults = [col for col in desired_defaults if col in numeric_columns]
+        
+        # Eğer varsayılanlar boşsa, rastgele ilk 3 taneyi seç (Yeter ki çökmesin)
+        if not valid_defaults and len(numeric_columns) >= 3:
+            valid_defaults = numeric_columns[:3]
 
-        # 1. Parametre Seçimi (Radar'ın köşeleri)
-        radar_cols = st.multiselect(
-            "Radarda Olacak Parametreler (En az 3 tane seç)",
-            numeric_columns,
-            default=["HGB", "PLT", "NEUT_HASH", "LYMPH_HASH", "CRP", "RDW"]
-        )
-
-        if len(radar_cols) >= 3:
-            # 2. Veriyi Hazırla ve Sırala
-            # Radar grafiği için verilerin 0-1 arasında olması ŞARTTIR.
-            # Yoksa 300.000 PLT yanında 5 CRP görünmez.
-            scaler_radar = MinMaxScaler()
-            df_radar_scaled = pd.DataFrame(scaler_radar.fit_transform(df_clean[numeric_cols]), columns=numeric_cols)
-            
-            # ID ve Orijinal NLR'yi geri ekle
-            df_radar_scaled['ID'] = df_clean['ID'].values
-            df_radar_scaled['Gercek_NLR'] = df_clean['NLR'].values
-            
-            # NLR'ye göre sırala (Küçükten Büyüğe)
-            df_sorted = df_radar_scaled.sort_values(by="Gercek_NLR").reset_index(drop=True)
-            
-            # 3. Slider ile Hasta Seçimi
-            total_patients = len(df_sorted)
-            selected_index = st.slider("Hastaları Tara (NLR Artışına Göre)", 0, total_patients-1, 0)
-            
-            # Seçilen Hasta Verisi
-            patient = df_sorted.iloc[selected_index]
-            
-            # 4. Radar Grafiğini Çiz
-            values = patient[radar_cols].values.tolist()
-            values += values[:1] # Şekli kapatmak için başa dön
-            
-            categories = radar_cols
-            categories += categories[:1]
-            
-            fig_radar = go.Figure()
-
-            fig_radar.add_trace(go.Scatterpolar(
-                r=values,
-                theta=categories,
-                fill='toself',
-                name=f"Hasta {patient['ID']}",
-                line_color='#00ff00' if patient['Gercek_NLR'] < 3 else '#ff0000'
-            ))
-
-            fig_radar.update_layout(
-                polar=dict(
-                    radialaxis=dict(
-                        visible=True,
-                        range=[0, 1] # Veriyi normalize ettiğimiz için
-                    )),
-                showlegend=False,
-                title=f"Hasta: {patient['ID']} | NLR: {patient['Gercek_NLR']:.2f}",
-                height=500
+        if len(numeric_columns) >= 3:
+            radar_cols = st.multiselect(
+                "Radarda Olacak Parametreler",
+                numeric_columns,
+                default=valid_defaults 
             )
-            
-            col_r1, col_r2 = st.columns([2, 1])
-            with col_r1:
-                st.plotly_chart(fig_radar, use_container_width=True)
-            
-            with col_r2:
-                st.info(f"**Sıralama:** {selected_index+1} / {total_patients}")
-                st.metric("Bu Hastanın NLR Değeri", f"{patient['Gercek_NLR']:.2f}")
-                
-                st.write("---")
-                st.markdown("**Şekil Yorumu:**")
-                st.markdown("* **Dar Alan:** İmmün sistem baskılanmış veya sakin.")
-                st.markdown("* **Geniş Alan:** Sistem genel alarma geçmiş.")
-                st.markdown("* **Sivri Köşeler:** O parametrede (Örn: CRP) dengesiz bir patlama var.")
 
+            if len(radar_cols) >= 3:
+                # Veriyi Radar için 0-1 arasına sıkıştır
+                scaler_radar = MinMaxScaler()
+                df_radar_scaled = pd.DataFrame(scaler_radar.fit_transform(df_clean[radar_cols]), columns=radar_cols)
+                
+                # ID ve Sıralama Kriterini (NLR) ekle
+                df_radar_scaled['ID'] = df_clean['ID'].values
+                
+                sort_col = "NLR" if "NLR" in df_clean.columns else numeric_columns[0]
+                df_radar_scaled['Sort_Val'] = df_clean[sort_col].values
+                
+                # Sırala
+                df_sorted = df_radar_scaled.sort_values(by='Sort_Val').reset_index(drop=True)
+                
+                # Slider
+                total_patients = len(df_sorted)
+                if total_patients > 0:
+                    selected_index = st.slider(f"Hastaları Tara ({sort_col} Artışına Göre)", 0, total_patients-1, 0)
+                    
+                    patient = df_sorted.iloc[selected_index]
+                    
+                    # Radar Çizimi
+                    values = patient[radar_cols].values.tolist()
+                    values += values[:1] # Kapatmak için
+                    categories = radar_cols + [radar_cols[0]]
+                    
+                    fig_radar = go.Figure()
+                    fig_radar.add_trace(go.Scatterpolar(
+                        r=values, theta=categories, fill='toself',
+                        name=f"Hasta {patient['ID']}",
+                        line_color='#FF5733'
+                    ))
+                    fig_radar.update_layout(
+                        polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
+                        showlegend=False,
+                        title=f"Hasta: {patient['ID']} | {sort_col}: {patient['Sort_Val']:.2f}",
+                        height=500
+                    )
+                    st.plotly_chart(fig_radar, use_container_width=True)
+                else:
+                    st.warning("Gösterilecek hasta yok.")
+            else:
+                st.warning("Lütfen en az 3 parametre seçin.")
         else:
-            st.warning("Lütfen radarda göstermek için en az 3 parametre seç.")
+            st.error("Yeterli sayısal veri sütunu bulunamadı.")
 
     # ==========================================
-    # SEKME 3: KLASİK TABLOLAR
+    # SEKME 3: JAMOVI TABLOSU
     # ==========================================
     with tab3:
-        st.dataframe(df_clean)
+        st.header("Tablo 1: Klinik Özellikler")
+        
+        c1, c2 = st.columns([1, 3])
+        with c1:
+            # Akıllı Seçim Burası İçin de Geçerli
+            default_table_cols = [c for c in ["HGB", "PLT", "CRP", "NLR", "SII"] if c in numeric_columns]
+            cols_to_show = st.multiselect("Tablo Parametreleri", numeric_columns, default=default_table_cols)
+            
+            # Otomatik Gruplama
+            if "CRP" in df_clean.columns:
+                df_clean['Grup'] = np.where(df_clean['CRP'] > 50, 'Yüksek Enfeksiyon', 'Düşük/Orta')
+                use_group = st.checkbox("Gruplandır (CRP > 50)")
+            else:
+                use_group = False
+
+        with c2:
+            if cols_to_show:
+                try:
+                    groupby_list = ['Grup'] if use_group else None
+                    
+                    mytable = TableOne(
+                        df_clean, 
+                        columns=cols_to_show, 
+                        groupby=groupby_list, 
+                        pval=True if use_group else False,
+                        nonnormal=cols_to_show 
+                    )
+                    st.markdown(mytable.tabulate(tablefmt="github"))
+                except Exception as e:
+                    st.error(f"Tablo oluşturulamadı: {e}")
+            
+        st.markdown("---")
+        st.subheader("Ham Veri")
+        st.dataframe(df)
 
 else:
-    st.info("Veri bekleniyor...")
+    st.info("Veri bekleniyor... Lütfen 'lab-asistan-app' üzerinden veri girişi yapın.")
