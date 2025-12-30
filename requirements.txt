@@ -10,3 +10,6 @@ seaborn
 matplotlib
 numpy
 tableone
+scikit-learn
+umap-learn
+plotly
