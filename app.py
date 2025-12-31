@@ -10,7 +10,7 @@ import base64
 import io
 
 # --- 1. AYARLAR ---
-st.set_page_config(page_title="Lab Asistanı (Pediatrik)", page_icon="👶", layout="wide")
+st.set_page_config(page_title="Makale Kulübü Lab Asistanı", page_icon="👶", layout="wide")
 
 try:
     if "GEMINI_API_KEY" in st.secrets:
@@ -47,15 +47,15 @@ def image_to_base64(image):
 # --- 4. ARAYÜZ ---
 st.title("👶 Lab Asistanı (Veri Girişi)")
 
-# --- YENİ BÖLÜM: YAŞ BİLGİSİ ---
+# --- YAŞ BİLGİSİ ---
 st.markdown("### 1. Hasta Bilgileri")
-st.info("Lütfen kağıtta yazan yaşı giriniz. Sadece ay varsa 'Yıl' kısmını 0 bırakın.")
+st.info("Lütfen ekranda yazan yaşı giriniz. Sadece ay varsa 'Yıl' kısmını 0 bırakın.")
 
 col_yas1, col_yas2 = st.columns(2)
 with col_yas1:
-    yas_yil = st.number_input("Yaş (YIL)", min_value=0, value=0, step=1, help="Örn: 1 yıl")
+    yas_yil = st.number_input("Yaş (YIL)", min_value=0, value=0, step=1)
 with col_yas2:
-    yas_ay = st.number_input("Yaş (AY)", min_value=0, max_value=11, value=0, step=1, help="Örn: 3 ay")
+    yas_ay = st.number_input("Yaş (AY)", min_value=0, max_value=11, value=0, step=1)
 
 st.markdown("---")
 
@@ -80,7 +80,7 @@ if st.button("Analizi Başlat ve Kaydet", type="primary"):
         st.warning("Lütfen dosya yükleyin veya fotoğraf çekin.")
         st.stop()
 
-    with st.spinner('Gemini 3.0 Pro okuyor...'):
+    with st.spinner('Hmm...'):
         try:
             content_parts = []
             
@@ -135,21 +135,15 @@ if st.button("Analizi Başlat ve Kaydet", type="primary"):
                     data = json.loads(text_content[start:end] if start != -1 else text_content)
 
                     # --- YAŞ HESAPLAMA ---
-                    # Asistanın girdiği verileri alıyoruz
                     total_months_calc = (yas_yil * 12) + yas_ay
                     
-                    st.success(f"✅ Hasta Kaydedildi: {data.get('ID')}")
-                    st.info(f"Girilen Yaş: {yas_yil} Yıl {yas_ay} Ay (Toplam: {total_months_calc} Ay)")
-
-                    # --- GOOGLE SHEETS KAYIT SIRASI ---
-                    # DİKKAT: Excel'deki sütun başlıklarını buna göre güncellemelisin!
-                    # Sıra: ID | YIL | AY | TOPLAM_AY | HGB | PLT | ...
+                    # --- GOOGLE SHEETS KAYDI ---
                     sheet = client.open(SHEET_NAME).sheet1
                     row = [
                         data.get("ID"),
-                        yas_yil,          # Manuel Girilen Yıl
-                        yas_ay,           # Manuel Girilen Ay
-                        total_months_calc,# Otomatik Hesaplanan Toplam Ay (Analiz için altın değer)
+                        yas_yil,
+                        yas_ay,
+                        total_months_calc,
                         data.get("HGB"),
                         data.get("PLT"),
                         data.get("RDW"),
@@ -161,11 +155,29 @@ if st.button("Analizi Başlat ve Kaydet", type="primary"):
                     ]
                     sheet.append_row(row)
                     
-                    # Önizleme
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("HGB", data.get("HGB"))
-                    c2.metric("CRP", data.get("CRP"))
-                    c3.metric("Yaş (Ay)", total_months_calc)
+                    # --- KONTROL EKRANI (DÜZELTİLDİ) ---
+                    st.success(f"✅ Başarıyla Kaydedildi! (ID: {data.get('ID')})")
+                    
+                    # Verileri düzenli bir sözlük haline getirelim
+                    kontrol_verisi = {
+                        "ID": data.get("ID"),
+                        "Yaş (Yıl/Ay)": f"{yas_yil}y {yas_ay}m",
+                        "Toplam Ay": total_months_calc,
+                        "HGB": data.get("HGB"),
+                        "PLT": data.get("PLT"),
+                        "RDW": data.get("RDW"),
+                        "Nötrofil#": data.get("NEUT_HASH"),
+                        "Lenfosit#": data.get("LYMPH_HASH"),
+                        "IG#": data.get("IG_HASH"),
+                        "CRP": data.get("CRP"),
+                        "Prokalsitonin": data.get("Prokalsitonin")
+                    }
+                    
+                    # Küçük ve Kompakt Tablo Olarak Göster
+                    st.markdown("###### 🔍 Kaydedilen Veri Kontrolü")
+                    st.dataframe(pd.DataFrame([kontrol_verisi]), hide_index=True)
+                    
+                    st.caption("ℹ️ Eğer yukarıdaki değerlerde hata varsa, Google Sheets üzerinden manuel düzeltebilirsiniz.")
 
                 except Exception as parse_error:
                     st.error("Veri okunamadı. Resim net olmayabilir.")
