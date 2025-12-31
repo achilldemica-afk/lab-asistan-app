@@ -1,240 +1,178 @@
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+import json
 import pandas as pd
-import altair as alt
-import numpy as np
-import plotly.graph_objects as go
-import plotly.express as px
-from sklearn.preprocessing import MinMaxScaler
-from tableone import TableOne
-import umap.umap_ as umap
+from datetime import datetime
+from PIL import Image
+import requests
+import base64
+import io
 
 # --- 1. AYARLAR ---
-st.set_page_config(page_title="İmmün Topoloji & Analiz", page_icon="🧬", layout="wide")
+st.set_page_config(page_title="Lab Asistanı (Pediatrik)", page_icon="👶", layout="wide")
 
-# --- 2. GÜVENLİK VE BAĞLANTI ---
 try:
+    if "GEMINI_API_KEY" in st.secrets:
+        API_KEY = st.secrets["GEMINI_API_KEY"]
+    else:
+        st.error("API Key eksik! Secrets ayarlarını kontrol et.")
+        st.stop()
+        
     if "gcp_service_account" in st.secrets:
         sheets_secrets = st.secrets["gcp_service_account"]
     else:
-        st.error("Google Sheets yetkisi eksik! Secrets ayarlarını kontrol edin.")
+        st.error("Google Sheets yetkisi eksik! Secrets ayarlarını kontrol et.")
         st.stop()
 except Exception as e:
     st.error(f"Ayar hatası: {e}")
     st.stop()
 
-# --- 3. VERİ ÇEKME FONKSİYONU ---
-@st.cache_data(ttl=60)
-def load_data():
-    try:
-        # Bağlantı
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(sheets_secrets, scope)
-        client = gspread.authorize(creds)
-        sheet = client.open("Hasta Takip").sheet1
-        
-        data = sheet.get_all_records()
-        df = pd.DataFrame(data)
-        
-        # Sayısal Temizlik
-        # Olası sütun isimlerini buraya ekledik
-        target_cols = ["HGB", "PLT", "RDW", "NEUT_HASH", "LYMPH_HASH", "IG_HASH", "CRP", "Prokalsitonin", "NEU#", "LYM#", "IG#"]
-        
-        for col in target_cols:
-            if col in df.columns:
-                # Stringe çevir -> Virgülleri nokta yap -> Sayıya çevir
-                df[col] = df[col].astype(str).str.replace(',', '.', regex=False)
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-        # --- İndeks Hesaplamaları (Varsa Hesapla) ---
-        # 1. NLR (Neutrophil / Lymphocyte)
-        # Sütun adı NEUT_HASH mi yoksa NEU# mi kontrol et
-        neu_col = "NEUT_HASH" if "NEUT_HASH" in df.columns else ("NEU#" if "NEU#" in df.columns else None)
-        lym_col = "LYMPH_HASH" if "LYMPH_HASH" in df.columns else ("LYM#" if "LYM#" in df.columns else None)
-        
-        if neu_col and lym_col:
-            df["NLR"] = df[neu_col] / df[lym_col]
+# --- 2. GOOGLE SHEETS BAĞLANTISI ---
+try:
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(sheets_secrets, scope)
+    client = gspread.authorize(creds)
+    SHEET_NAME = "Hasta Takip" 
+except Exception as e:
+    st.error(f"Google Sheets Bağlantı Hatası: {e}")
+    st.stop()
 
-        # 2. PLR (Platelet / Lymphocyte)
-        if "PLT" in df.columns and lym_col:
-            df["PLR"] = df["PLT"] / df[lym_col]
-
-        # 3. SII (Systemic Immune-Inflammation Index)
-        if "PLT" in df.columns and neu_col and lym_col:
-             df["SII"] = (df["PLT"] * df[neu_col]) / df[lym_col]
-
-        return df
-    except Exception as e:
-        st.error(f"Veri çekme hatası: {e}")
-        return pd.DataFrame()
+# --- 3. YARDIMCI FONKSİYON ---
+def image_to_base64(image):
+    buffered = io.BytesIO()
+    image.save(buffered, format="PNG")
+    return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
 # --- 4. ARAYÜZ ---
-st.title("🧬 İmmün Sistemin Geometrisi ve Analizi")
+st.title("👶 Lab Asistanı (Veri Girişi)")
 
-df = load_data()
+# --- YENİ BÖLÜM: YAŞ BİLGİSİ ---
+st.markdown("### 1. Hasta Bilgileri")
+st.info("Lütfen kağıtta yazan yaşı giriniz. Sadece ay varsa 'Yıl' kısmını 0 bırakın.")
 
-if not df.empty:
-    # Sadece sayısal olan sütunları al (İsim, ID hariç)
-    numeric_columns = df.select_dtypes(include=['float64', 'int64']).columns.tolist()
+col_yas1, col_yas2 = st.columns(2)
+with col_yas1:
+    yas_yil = st.number_input("Yaş (YIL)", min_value=0, value=0, step=1, help="Örn: 1 yıl")
+with col_yas2:
+    yas_ay = st.number_input("Yaş (AY)", min_value=0, max_value=11, value=0, step=1, help="Örn: 3 ay")
+
+st.markdown("---")
+
+# --- DOSYA YÜKLEME ---
+st.markdown("### 2. Laboratuvar Sonuçları")
+st.caption("Telefondan giriyorsanız 'Browse files' -> 'Fotoğraf Çek' seçeneğini kullanın.")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.markdown("#### Hemogram")
+    hemo_file = st.file_uploader("Hemogram Yükle / Çek", type=["jpg", "png", "jpeg"], key="hemo")
+
+with col2:
+    st.markdown("#### Biyokimya")
+    bio_file = st.file_uploader("Biyokimya Yükle / Çek", type=["jpg", "png", "jpeg"], key="bio")
+
+
+if st.button("Analizi Başlat ve Kaydet", type="primary"):
     
-    # Veri Temizliği (Boşlukları at, yoksa UMAP ve Radar çalışmaz)
-    df_clean = df.dropna(subset=[c for c in numeric_columns if c in df.columns])
+    if not hemo_file and not bio_file:
+        st.warning("Lütfen dosya yükleyin veya fotoğraf çekin.")
+        st.stop()
 
-    # Sekmeler
-    tab1, tab2, tab3 = st.tabs(["🗺️ UMAP (Harita)", "🕸️ Radar (Şekil)", "📋 Tablolar & Jamovi"])
-
-    # ==========================================
-    # SEKME 1: UMAP & FENOTİP HARİTASI
-    # ==========================================
-    with tab1:
-        st.markdown("### Hipotez Kontrolü")
-        st.info("Benzer hastalar bir arada mı duruyor? NLR renk geçişi düzenli mi?")
-
-        if len(df_clean) > 5:
-            try:
-                # UMAP için veriyi hazırla
-                # Sadece mevcut sayısal sütunları kullan
-                features = [c for c in numeric_columns if c in df_clean.columns and c not in ['UMAP_X', 'UMAP_Y']]
-                
-                if len(features) > 2:
-                    scaler = MinMaxScaler()
-                    scaled_data = scaler.fit_transform(df_clean[features])
-                    
-                    reducer = umap.UMAP(n_neighbors=5, min_dist=0.3, random_state=42)
-                    embedding = reducer.fit_transform(scaled_data)
-                    
-                    df_clean['UMAP_X'] = embedding[:, 0]
-                    df_clean['UMAP_Y'] = embedding[:, 1]
-                    
-                    # Renklendirme seçeneği
-                    valid_colors = [c for c in ["NLR", "CRP", "PLT", "SII"] if c in df_clean.columns]
-                    color_by = st.selectbox("Renklendirme Kriteri", valid_colors, index=0 if valid_colors else None)
-                    
-                    if color_by:
-                        fig_umap = px.scatter(
-                            df_clean, x='UMAP_X', y='UMAP_Y',
-                            color=color_by,
-                            hover_data=['ID'],
-                            color_continuous_scale='Turbo',
-                            title=f"Hasta Evreni ({color_by} Dağılımı)"
-                        )
-                        st.plotly_chart(fig_umap, use_container_width=True)
-                    else:
-                        st.warning("Renklendirme için uygun sütun bulunamadı (NLR hesaplanamamış olabilir).")
-                else:
-                    st.warning("Yeterli parametre yok.")
-            except Exception as e:
-                st.error(f"UMAP Hatası: {e}")
-        else:
-            st.warning("UMAP analizi için en az 5-10 hasta verisi gerekiyor.")
-
-    # ==========================================
-    # SEKME 2: RADAR (ŞEKİL) ANALİZİ
-    # ==========================================
-    with tab2:
-        st.markdown("### 🕸️ Şekil Değişimi (Shape Deformation)")
-        
-        # --- HATA ÖNLEYİCİ AKILLI SEÇİM ---
-        # 1. Kodun çökmesini önlemek için varsayılan listeyi kontrol et
-        desired_defaults = ["HGB", "PLT", "NEUT_HASH", "LYMPH_HASH", "CRP", "RDW", "NEU#", "LYM#"]
-        valid_defaults = [col for col in desired_defaults if col in numeric_columns]
-        
-        # Eğer varsayılanlar boşsa, rastgele ilk 3 taneyi seç (Yeter ki çökmesin)
-        if not valid_defaults and len(numeric_columns) >= 3:
-            valid_defaults = numeric_columns[:3]
-
-        if len(numeric_columns) >= 3:
-            radar_cols = st.multiselect(
-                "Radarda Olacak Parametreler",
-                numeric_columns,
-                default=valid_defaults 
-            )
-
-            if len(radar_cols) >= 3:
-                # Veriyi Radar için 0-1 arasına sıkıştır
-                scaler_radar = MinMaxScaler()
-                df_radar_scaled = pd.DataFrame(scaler_radar.fit_transform(df_clean[radar_cols]), columns=radar_cols)
-                
-                # ID ve Sıralama Kriterini (NLR) ekle
-                df_radar_scaled['ID'] = df_clean['ID'].values
-                
-                sort_col = "NLR" if "NLR" in df_clean.columns else numeric_columns[0]
-                df_radar_scaled['Sort_Val'] = df_clean[sort_col].values
-                
-                # Sırala
-                df_sorted = df_radar_scaled.sort_values(by='Sort_Val').reset_index(drop=True)
-                
-                # Slider
-                total_patients = len(df_sorted)
-                if total_patients > 0:
-                    selected_index = st.slider(f"Hastaları Tara ({sort_col} Artışına Göre)", 0, total_patients-1, 0)
-                    
-                    patient = df_sorted.iloc[selected_index]
-                    
-                    # Radar Çizimi
-                    values = patient[radar_cols].values.tolist()
-                    values += values[:1] # Kapatmak için
-                    categories = radar_cols + [radar_cols[0]]
-                    
-                    fig_radar = go.Figure()
-                    fig_radar.add_trace(go.Scatterpolar(
-                        r=values, theta=categories, fill='toself',
-                        name=f"Hasta {patient['ID']}",
-                        line_color='#FF5733'
-                    ))
-                    fig_radar.update_layout(
-                        polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
-                        showlegend=False,
-                        title=f"Hasta: {patient['ID']} | {sort_col}: {patient['Sort_Val']:.2f}",
-                        height=500
-                    )
-                    st.plotly_chart(fig_radar, use_container_width=True)
-                else:
-                    st.warning("Gösterilecek hasta yok.")
-            else:
-                st.warning("Lütfen en az 3 parametre seçin.")
-        else:
-            st.error("Yeterli sayısal veri sütunu bulunamadı.")
-
-    # ==========================================
-    # SEKME 3: JAMOVI TABLOSU
-    # ==========================================
-    with tab3:
-        st.header("Tablo 1: Klinik Özellikler")
-        
-        c1, c2 = st.columns([1, 3])
-        with c1:
-            # Akıllı Seçim Burası İçin de Geçerli
-            default_table_cols = [c for c in ["HGB", "PLT", "CRP", "NLR", "SII"] if c in numeric_columns]
-            cols_to_show = st.multiselect("Tablo Parametreleri", numeric_columns, default=default_table_cols)
+    with st.spinner('Gemini 3.0 Pro okuyor...'):
+        try:
+            content_parts = []
             
-            # Otomatik Gruplama
-            if "CRP" in df_clean.columns:
-                df_clean['Grup'] = np.where(df_clean['CRP'] > 50, 'Yüksek Enfeksiyon', 'Düşük/Orta')
-                use_group = st.checkbox("Gruplandır (CRP > 50)")
-            else:
-                use_group = False
+            # --- PROMPT ---
+            prompt_text = """
+            GÖREV: Sen titiz bir veri giriş operatörüsün.
+            
+            YÖNTEM (SATIR TAKİP):
+            1. Sol sütunda Parametre Adını bul.
+            2. Parmağını sağa kaydır, REFERANS ARALIĞINI ATLA, SONUÇ (Result) değerini al.
+            
+            BULUNACAKLAR:
+            - HGB (Hemoglobin)
+            - PLT (Trombosit)
+            - RDW
+            - NEU# (Nötrofil Mutlak) -> Yoksa 'null'
+            - LYM# (Lenfosit Mutlak) -> Yoksa 'null'
+            - IG# (İmmatür Granülosit) -> Yoksa 'null'
+            - CRP -> Yoksa 'null'
+            - Prokalsitonin -> Yoksa 'null'
+            
+            KİMLİK:
+            - Sol üstteki İsim/Protokol -> 'ID'
+            
+            ÇIKTI (JSON):
+            { "ID": "...", "HGB": 0.0, "PLT": 0, "RDW": 0.0, "NEUT_HASH": 0.0, "LYMPH_HASH": 0.0, "IG_HASH": 0.0, "CRP": 0.0, "Prokalsitonin": 0.0 }
+            """
+            
+            content_parts.append({"text": prompt_text})
 
-        with c2:
-            if cols_to_show:
+            if hemo_file:
+                content_parts.append({"inline_data": {"mime_type": "image/png", "data": image_to_base64(Image.open(hemo_file))}})
+            if bio_file:
+                content_parts.append({"inline_data": {"mime_type": "image/png", "data": image_to_base64(Image.open(bio_file))}})
+
+            # MODEL: Gemini 3.0 Pro Preview
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent?key={API_KEY}"
+            
+            headers = {'Content-Type': 'application/json'}
+            payload = {"contents": [{"parts": content_parts}]}
+            
+            response = requests.post(url, headers=headers, json=payload)
+            
+            if response.status_code == 200:
+                result = response.json()
                 try:
-                    groupby_list = ['Grup'] if use_group else None
+                    text_content = result['candidates'][0]['content']['parts'][0]['text']
+                    text_content = text_content.replace("```json", "").replace("```", "").strip()
                     
-                    mytable = TableOne(
-                        df_clean, 
-                        columns=cols_to_show, 
-                        groupby=groupby_list, 
-                        pval=True if use_group else False,
-                        nonnormal=cols_to_show 
-                    )
-                    st.markdown(mytable.tabulate(tablefmt="github"))
-                except Exception as e:
-                    st.error(f"Tablo oluşturulamadı: {e}")
-            
-        st.markdown("---")
-        st.subheader("Ham Veri")
-        st.dataframe(df)
+                    start = text_content.find('{')
+                    end = text_content.rfind('}') + 1
+                    data = json.loads(text_content[start:end] if start != -1 else text_content)
 
-else:
-    st.info("Veri bekleniyor... Lütfen 'lab-asistan-app' üzerinden veri girişi yapın.")
+                    # --- YAŞ HESAPLAMA ---
+                    # Asistanın girdiği verileri alıyoruz
+                    total_months_calc = (yas_yil * 12) + yas_ay
+                    
+                    st.success(f"✅ Hasta Kaydedildi: {data.get('ID')}")
+                    st.info(f"Girilen Yaş: {yas_yil} Yıl {yas_ay} Ay (Toplam: {total_months_calc} Ay)")
+
+                    # --- GOOGLE SHEETS KAYIT SIRASI ---
+                    # DİKKAT: Excel'deki sütun başlıklarını buna göre güncellemelisin!
+                    # Sıra: ID | YIL | AY | TOPLAM_AY | HGB | PLT | ...
+                    sheet = client.open(SHEET_NAME).sheet1
+                    row = [
+                        data.get("ID"),
+                        yas_yil,          # Manuel Girilen Yıl
+                        yas_ay,           # Manuel Girilen Ay
+                        total_months_calc,# Otomatik Hesaplanan Toplam Ay (Analiz için altın değer)
+                        data.get("HGB"),
+                        data.get("PLT"),
+                        data.get("RDW"),
+                        data.get("NEUT_HASH"),
+                        data.get("LYMPH_HASH"),
+                        data.get("IG_HASH"),
+                        data.get("CRP"),
+                        data.get("Prokalsitonin")
+                    ]
+                    sheet.append_row(row)
+                    
+                    # Önizleme
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("HGB", data.get("HGB"))
+                    c2.metric("CRP", data.get("CRP"))
+                    c3.metric("Yaş (Ay)", total_months_calc)
+
+                except Exception as parse_error:
+                    st.error("Veri okunamadı. Resim net olmayabilir.")
+                    st.text(text_content)
+            else:
+                st.error(f"Sunucu Hatası: {response.status_code}")
+                st.write(response.text)
+
+        except Exception as e:
+            st.error(f"Hata: {e}")
