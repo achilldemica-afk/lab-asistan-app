@@ -12,6 +12,10 @@ import io
 # --- 1. AYARLAR ---
 st.set_page_config(page_title="Makale Kulübü Lab Asistanı", page_icon="👶", layout="wide")
 
+# Session State Başlatma (Hafıza)
+if 'okunan_veri' not in st.session_state:
+    st.session_state.okunan_veri = None
+
 try:
     if "GEMINI_API_KEY" in st.secrets:
         API_KEY = st.secrets["GEMINI_API_KEY"]
@@ -45,7 +49,7 @@ def image_to_base64(image):
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
 # --- 4. ARAYÜZ ---
-st.title("👶 Makale Kulübü Lab Asistanı (Veri Girişi)")
+st.title("👶 Makale Kulübü Lab Asistanı (Güvenli Veri Girişi)")
 
 # --- YAŞ BİLGİSİ ---
 st.markdown("### 1. Hasta Bilgileri")
@@ -73,14 +77,14 @@ with col2:
     st.markdown("#### Biyokimya")
     bio_file = st.file_uploader("Biyokimya Yükle / Çek", type=["jpg", "png", "jpeg"], key="bio")
 
-
-if st.button("Analizi Başlat ve Kaydet", type="primary"):
+# --- ADIM 1: ANALİZ BUTONU (KAYDETMEZ) ---
+if st.button("🔍 1. Fotoğrafları Oku (Kaydetmez)", type="primary"):
     
     if not hemo_file and not bio_file:
         st.warning("Lütfen dosya yükleyin veya fotoğraf çekin.")
         st.stop()
 
-    with st.spinner('Hmm...'):
+    with st.spinner('Yapay zeka verileri okuyor...'):
         try:
             content_parts = []
             
@@ -134,50 +138,17 @@ if st.button("Analizi Başlat ve Kaydet", type="primary"):
                     end = text_content.rfind('}') + 1
                     data = json.loads(text_content[start:end] if start != -1 else text_content)
 
-                    # --- YAŞ HESAPLAMA ---
-                    total_months_calc = (yas_yil * 12) + yas_ay
+                    # --- YAŞ HESAPLAMA VE VERİ BİRLEŞTİRME ---
+                    # Veriyi DataFrame'e çevirip yaş bilgilerini ekliyoruz
+                    data["YAS_YIL"] = yas_yil
+                    data["YAS_AY"] = yas_ay
+                    data["TOPLAM_AY"] = (yas_yil * 12) + yas_ay
                     
-                    # --- GOOGLE SHEETS KAYDI ---
-                    sheet = client.open(SHEET_NAME).sheet1
-                    row = [
-                        data.get("ID"),
-                        yas_yil,
-                        yas_ay,
-                        total_months_calc,
-                        data.get("HGB"),
-                        data.get("PLT"),
-                        data.get("RDW"),
-                        data.get("NEUT_HASH"),
-                        data.get("LYMPH_HASH"),
-                        data.get("IG_HASH"),
-                        data.get("CRP"),
-                        data.get("Prokalsitonin")
-                    ]
-                    sheet.append_row(row)
+                    # Session State'e kaydet (Hafızaya al)
+                    st.session_state.okunan_veri = pd.DataFrame([data])
                     
-                    # --- KONTROL EKRANI (DÜZELTİLDİ) ---
-                    st.success(f"✅ Başarıyla Kaydedildi! (ID: {data.get('ID')})")
-                    
-                    # Verileri düzenli bir sözlük haline getirelim
-                    kontrol_verisi = {
-                        "ID": data.get("ID"),
-                        "Yaş (Yıl/Ay)": f"{yas_yil}y {yas_ay}m",
-                        "Toplam Ay": total_months_calc,
-                        "HGB": data.get("HGB"),
-                        "PLT": data.get("PLT"),
-                        "RDW": data.get("RDW"),
-                        "Nötrofil#": data.get("NEUT_HASH"),
-                        "Lenfosit#": data.get("LYMPH_HASH"),
-                        "IG#": data.get("IG_HASH"),
-                        "CRP": data.get("CRP"),
-                        "Prokalsitonin": data.get("Prokalsitonin")
-                    }
-                    
-                    # Küçük ve Kompakt Tablo Olarak Göster
-                    st.markdown("###### 🔍 Kaydedilen Veri Kontrolü")
-                    st.dataframe(pd.DataFrame([kontrol_verisi]), hide_index=True)
-                    
-                    st.caption("ℹ️ Eğer yukarıdaki değerlerde hata varsa, Google Sheets üzerinden manuel düzeltebilirsiniz.")
+                    # Sayfayı yenile ki editör açılsın
+                    st.rerun()
 
                 except Exception as parse_error:
                     st.error("Veri okunamadı. Resim net olmayabilir.")
@@ -188,3 +159,68 @@ if st.button("Analizi Başlat ve Kaydet", type="primary"):
 
         except Exception as e:
             st.error(f"Hata: {e}")
+
+# --- ADIM 2: KONTROL VE DÜZELTME EKRANI ---
+if st.session_state.okunan_veri is not None:
+    st.markdown("---")
+    st.info("⚠️ Lütfen aşağıdaki değerleri kontrol edin. Hatalı bir yer varsa **üzerine tıklayıp düzeltebilirsiniz.**")
+    
+    # EDİTÖR: Excel gibi düzenlenebilir tablo
+    # Sütun sırasını kullanıcı dostu yapalım
+    column_order = ["ID", "YAS_YIL", "YAS_AY", "TOPLAM_AY", "HGB", "PLT", "RDW", "NEUT_HASH", "LYMPH_HASH", "IG_HASH", "CRP", "Prokalsitonin"]
+    
+    # Sadece veride var olan sütunları seç (Hata önlemek için)
+    existing_cols = [col for col in column_order if col in st.session_state.okunan_veri.columns]
+    
+    duzenlenmis_df = st.data_editor(
+        st.session_state.okunan_veri, 
+        column_order=existing_cols,
+        num_rows="fixed", 
+        hide_index=True,
+        use_container_width=True
+    )
+    
+    col_save, col_cancel = st.columns([1, 4])
+    
+    # --- ADIM 3: KAYDET BUTONU ---
+    with col_save:
+        if st.button("✅ Onayla ve Kaydet", type="primary"):
+            try:
+                # Düzenlenmiş veriyi al
+                final_data = duzenlenmis_df.iloc[0]
+                
+                # Google Sheets'e Kayıt (Sıraya dikkat)
+                sheet = client.open(SHEET_NAME).sheet1
+                row = [
+                    final_data.get("ID"),
+                    final_data.get("YAS_YIL"),
+                    final_data.get("YAS_AY"),
+                    final_data.get("TOPLAM_AY"),
+                    final_data.get("HGB"),
+                    final_data.get("PLT"),
+                    final_data.get("RDW"),
+                    final_data.get("NEUT_HASH"),
+                    final_data.get("LYMPH_HASH"),
+                    final_data.get("IG_HASH"),
+                    final_data.get("CRP"),
+                    final_data.get("Prokalsitonin")
+                ]
+                
+                # NaN (Boş) değerleri temizle (Google Sheets hatasını önler)
+                row = [str(x) if pd.notna(x) else "" for x in row]
+                
+                sheet.append_row(row)
+                
+                st.success(f"Başarıyla Kaydedildi! (ID: {final_data.get('ID')})")
+                
+                # Hafızayı temizle (Yeni hasta için)
+                st.session_state.okunan_veri = None
+                # st.rerun() # Otomatik sıfırlamak istersen bu satırı aç
+                
+            except Exception as e:
+                st.error(f"Kayıt Hatası: {e}")
+
+    with col_cancel:
+        if st.button("❌ İptal / Temizle"):
+            st.session_state.okunan_veri = None
+            st.rerun()
