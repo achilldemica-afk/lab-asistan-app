@@ -49,7 +49,7 @@ def image_to_base64(image):
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
 # --- 4. ARAYÜZ ---
-st.title("👶 Makale Kulübü Lab Asistanı (Güvenli Veri Girişi)")
+st.title("👶 Makale Kulübü Lab Asistanı")
 
 # --- YAŞ BİLGİSİ ---
 st.markdown("### 1. Hasta Bilgileri")
@@ -84,7 +84,7 @@ if st.button("🔍 1. Fotoğrafları Oku (Kaydetmez)", type="primary"):
         st.warning("Lütfen dosya yükleyin veya fotoğraf çekin.")
         st.stop()
 
-    with st.spinner('Yapay zeka verileri okuyor...'):
+    with st.spinner('Hmm...'):
         try:
             content_parts = []
             
