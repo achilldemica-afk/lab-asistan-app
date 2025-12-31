@@ -10,7 +10,7 @@ import base64
 import io
 
 # --- 1. AYARLAR ---
-st.set_page_config(page_title="Makale Kulübü Lab Asistanı", page_icon="🩸", layout="wide")
+st.set_page_config(page_title="Lab Asistanı (Pediatrik)", page_icon="👶", layout="wide")
 
 try:
     if "GEMINI_API_KEY" in st.secrets:
@@ -45,65 +45,68 @@ def image_to_base64(image):
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
 # --- 4. ARAYÜZ ---
-st.title("🩸 Makale Kulübü Lab Asistanı")
-st.info("ℹ️ Telefondan giriyorsanız **'Browse files'** butonuna basınca **'Fotoğraf Çek'** veya **'Kamera'** seçeneğini seçin.")
+st.title("👶 Lab Asistanı (Veri Girişi)")
+
+# --- YENİ BÖLÜM: YAŞ BİLGİSİ ---
+st.markdown("### 1. Hasta Bilgileri")
+st.info("Lütfen kağıtta yazan yaşı giriniz. Sadece ay varsa 'Yıl' kısmını 0 bırakın.")
+
+col_yas1, col_yas2 = st.columns(2)
+with col_yas1:
+    yas_yil = st.number_input("Yaş (YIL)", min_value=0, value=0, step=1, help="Örn: 1 yıl")
+with col_yas2:
+    yas_ay = st.number_input("Yaş (AY)", min_value=0, max_value=11, value=0, step=1, help="Örn: 3 ay")
+
+st.markdown("---")
+
+# --- DOSYA YÜKLEME ---
+st.markdown("### 2. Laboratuvar Sonuçları")
+st.caption("Telefondan giriyorsanız 'Browse files' -> 'Fotoğraf Çek' seçeneğini kullanın.")
 
 col1, col2 = st.columns(2)
 
 with col1:
-    st.markdown("### 1. Hemogram")
+    st.markdown("#### Hemogram")
     hemo_file = st.file_uploader("Hemogram Yükle / Çek", type=["jpg", "png", "jpeg"], key="hemo")
 
 with col2:
-    st.markdown("### 2. Biyokimya")
+    st.markdown("#### Biyokimya")
     bio_file = st.file_uploader("Biyokimya Yükle / Çek", type=["jpg", "png", "jpeg"], key="bio")
 
 
-if st.button("Analizi Başlat", type="primary"):
+if st.button("Analizi Başlat ve Kaydet", type="primary"):
     
     if not hemo_file and not bio_file:
         st.warning("Lütfen dosya yükleyin veya fotoğraf çekin.")
         st.stop()
 
-    with st.spinner('Hmm...'):
+    with st.spinner('Gemini 3.0 Pro okuyor...'):
         try:
             content_parts = []
             
-            # --- PROMPT: SATIR VE SÜTUN TAKİP MANTIĞI ---
+            # --- PROMPT ---
             prompt_text = """
-            GÖREV: Sen titiz bir veri giriş operatörüsün. Önündeki kağıtta yazanları satır satır okuyup sisteme gireceksin.
+            GÖREV: Sen titiz bir veri giriş operatörüsün.
             
-            YÖNTEMİN ŞU OLACAK (ADIM ADIM):
-            1. Önce sol sütunda "Parametre Adını" (Test İsmi) bul.
-            2. Bulduğun satırda parmağını sağa kaydır ve ilk karşına çıkan "SONUÇ" (Result) rakamını al.
-            3. Yan taraftaki "Referans Aralığı" (Örn: 11-15) sütununa SAKIN bakma. Orayı görmezden gel.
+            YÖNTEM (SATIR TAKİP):
+            1. Sol sütunda Parametre Adını bul.
+            2. Parmağını sağa kaydır, REFERANS ARALIĞINI ATLA, SONUÇ (Result) değerini al.
             
-            AŞAĞIDAKİLERİ TEK TEK BUL:
-            - "HGB" veya "Hemoglobin" yazısını bul -> Yanındaki Sonucu al.
-            - "PLT" veya "Trombosit" yazısını bul -> Yanındaki Sonucu al.
-            - "RDW" yazısını bul -> Yanındaki Sonucu al.
-            - "NEU#" veya "Nötrofil#" (Mutlak değer) yazısını bul -> Yanındaki Sonucu al.
-            - "LYM#" veya "Lenfosit#" (Mutlak değer) yazısını bul -> Yanındaki Sonucu al.
-            - "IG#" veya "İmmatür Granülosit" yazısını bul -> Yanındaki Sonucu al.
-            - "CRP" yazısını bul -> Yanındaki Sonucu al. (Referansla aynı olsa bile al!)
-            - "Prokalsitonin" yazısını bul -> Yanındaki Sonucu al.
+            BULUNACAKLAR:
+            - HGB (Hemoglobin)
+            - PLT (Trombosit)
+            - RDW
+            - NEU# (Nötrofil Mutlak) -> Yoksa 'null'
+            - LYM# (Lenfosit Mutlak) -> Yoksa 'null'
+            - IG# (İmmatür Granülosit) -> Yoksa 'null'
+            - CRP -> Yoksa 'null'
+            - Prokalsitonin -> Yoksa 'null'
             
             KİMLİK:
-            - Sol üstteki İsim veya Protokol numarasını 'ID' olarak al.
+            - Sol üstteki İsim/Protokol -> 'ID'
             
-            ÇIKTI FORMATI (SADECE JSON):
-            {
-                "ID": "...",
-                "HGB": 0.0,
-                "PLT": 0,
-                "RDW": 0.0,
-                "NEUT_HASH": 0.0,
-                "LYMPH_HASH": 0.0,
-                "IG_HASH": 0.0,
-                "CRP": 0.0,
-                "Prokalsitonin": 0.0
-            }
-            Rakam yoksa null yaz. Ondalık için nokta kullan.
+            ÇIKTI (JSON):
+            { "ID": "...", "HGB": 0.0, "PLT": 0, "RDW": 0.0, "NEUT_HASH": 0.0, "LYMPH_HASH": 0.0, "IG_HASH": 0.0, "CRP": 0.0, "Prokalsitonin": 0.0 }
             """
             
             content_parts.append({"text": prompt_text})
@@ -113,7 +116,7 @@ if st.button("Analizi Başlat", type="primary"):
             if bio_file:
                 content_parts.append({"inline_data": {"mime_type": "image/png", "data": image_to_base64(Image.open(bio_file))}})
 
-            # --- MODEL: Gemini 3.0 Pro Preview (En Akıllısı) ---
+            # MODEL: Gemini 3.0 Pro Preview
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent?key={API_KEY}"
             
             headers = {'Content-Type': 'application/json'}
@@ -129,26 +132,24 @@ if st.button("Analizi Başlat", type="primary"):
                     
                     start = text_content.find('{')
                     end = text_content.rfind('}') + 1
-                    if start != -1 and end != -1:
-                         data = json.loads(text_content[start:end])
-                    else:
-                         data = json.loads(text_content)
+                    data = json.loads(text_content[start:end] if start != -1 else text_content)
 
-                    st.subheader(f"Hasta: {data.get('ID', 'Bilinmiyor')}")
+                    # --- YAŞ HESAPLAMA ---
+                    # Asistanın girdiği verileri alıyoruz
+                    total_months_calc = (yas_yil * 12) + yas_ay
                     
-                    c1, c2, c3, c4 = st.columns(4)
-                    c1.metric("HGB", data.get("HGB"))
-                    c2.metric("PLT", data.get("PLT"))
-                    c3.metric("CRP", data.get("CRP"))
-                    c4.metric("Prokalsitonin", data.get("Prokalsitonin"))
+                    st.success(f"✅ Hasta Kaydedildi: {data.get('ID')}")
+                    st.info(f"Girilen Yaş: {yas_yil} Yıl {yas_ay} Ay (Toplam: {total_months_calc} Ay)")
 
-                    with st.expander("Tüm Veriyi Gör"):
-                        st.json(data)
-
-                    # Kayıt
+                    # --- GOOGLE SHEETS KAYIT SIRASI ---
+                    # DİKKAT: Excel'deki sütun başlıklarını buna göre güncellemelisin!
+                    # Sıra: ID | YIL | AY | TOPLAM_AY | HGB | PLT | ...
                     sheet = client.open(SHEET_NAME).sheet1
                     row = [
                         data.get("ID"),
+                        yas_yil,          # Manuel Girilen Yıl
+                        yas_ay,           # Manuel Girilen Ay
+                        total_months_calc,# Otomatik Hesaplanan Toplam Ay (Analiz için altın değer)
                         data.get("HGB"),
                         data.get("PLT"),
                         data.get("RDW"),
@@ -159,10 +160,15 @@ if st.button("Analizi Başlat", type="primary"):
                         data.get("Prokalsitonin")
                     ]
                     sheet.append_row(row)
-                    st.success("✅ Başarıyla Kaydedildi!")
                     
+                    # Önizleme
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("HGB", data.get("HGB"))
+                    c2.metric("CRP", data.get("CRP"))
+                    c3.metric("Yaş (Ay)", total_months_calc)
+
                 except Exception as parse_error:
-                    st.error("Veri okunamadı. Lütfen fotoğrafın net olduğundan emin olun.")
+                    st.error("Veri okunamadı. Resim net olmayabilir.")
                     st.text(text_content)
             else:
                 st.error(f"Sunucu Hatası: {response.status_code}")
